@@ -7,7 +7,7 @@ const logger = createLogger('websocket');
 
 let wssInstance: WebSocketServer | null = null;
 let lastKnownState: VoicePlatformState = {
-  guildId: null,
+  guildId: '',
   voiceState: 'DISCONNECTED',
   playerState: 'IDLE',
   track: null,
