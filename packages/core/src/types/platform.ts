@@ -66,5 +66,7 @@ export interface VoicePlatformAdapter {
 
   onStateChange(listener: (state: VoicePlatformState) => void): void;
   onError(listener: (guildId: string, error: Error) => void): void;
+  onTrackEnd?(listener: (guildId: string) => void): void;
 }
+
 

@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 
 export interface PlaybackTrack {
+  id?: string;
   name: string;
   duration: number | null;
   artist?: string | null;
@@ -13,11 +14,33 @@ export interface PlaybackStatePayload {
   track: PlaybackTrack | null;
 }
 
-const DEFAULT_STATE: PlaybackStatePayload = {
+export interface QueueDisplayItem {
+  position: number;
+  id: string;
+  name: string;
+  duration?: number;
+  addedBy?: string;
+}
+
+export interface QueueStatePayload {
+  guildId: string;
+  currentTrack: PlaybackTrack | null;
+  queue: QueueDisplayItem[];
+  length: number;
+}
+
+const DEFAULT_PLAYBACK: PlaybackStatePayload = {
   guildId: null,
   voiceState: 'DISCONNECTED',
   playerState: 'IDLE',
   track: null,
+};
+
+const DEFAULT_QUEUE: QueueStatePayload = {
+  guildId: '',
+  currentTrack: null,
+  queue: [],
+  length: 0,
 };
 
 function formatDuration(seconds: number | null | undefined): string {
@@ -28,21 +51,28 @@ function formatDuration(seconds: number | null | undefined): string {
 }
 
 export function PlaybackStatus() {
-  const [playback, setPlayback] = useState<PlaybackStatePayload>(DEFAULT_STATE);
+  const [playback, setPlayback] = useState<PlaybackStatePayload>(DEFAULT_PLAYBACK);
+  const [queueState, setQueueState] = useState<QueueStatePayload>(DEFAULT_QUEUE);
   const [wsConnected, setWsConnected] = useState<boolean>(false);
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
     // Initial fetch from REST API
-    const fetchInitialState = async () => {
+    const fetchInitialData = async () => {
       try {
         const res = await fetch('/api/playback');
         if (res.ok) {
           const data = await res.json();
           if (data.primary) {
             setPlayback(data.primary);
+            if (data.primary.guildId) {
+              fetchQueue(data.primary.guildId);
+            }
           } else if (data.voiceState) {
             setPlayback(data);
+            if (data.guildId) {
+              fetchQueue(data.guildId);
+            }
           }
         }
       } catch {
@@ -50,7 +80,19 @@ export function PlaybackStatus() {
       }
     };
 
-    fetchInitialState();
+    const fetchQueue = async (guildId: string) => {
+      try {
+        const res = await fetch(`/api/queue/${guildId}`);
+        if (res.ok) {
+          const data: QueueStatePayload = await res.json();
+          setQueueState(data);
+        }
+      } catch {
+        // Ignore
+      }
+    };
+
+    fetchInitialData();
 
     // WebSocket connection
     let reconnectTimer: NodeJS.Timeout;
@@ -69,6 +111,16 @@ export function PlaybackStatus() {
           const msg = JSON.parse(event.data);
           if (msg.type === 'playback_state' && msg.payload) {
             setPlayback(msg.payload);
+            if (msg.payload.guildId) {
+              fetchQueue(msg.payload.guildId);
+            }
+          } else if (msg.type === 'queue.updated') {
+            setQueueState({
+              guildId: msg.guildId,
+              currentTrack: msg.currentTrack,
+              queue: msg.queue || [],
+              length: msg.length ?? (msg.queue ? msg.queue.length : 0),
+            });
           }
         } catch {
           // ignore malformed message
@@ -97,6 +149,7 @@ export function PlaybackStatus() {
 
   const voiceClass = playback.voiceState.toLowerCase();
   const playerClass = playback.playerState.toLowerCase();
+  const activeTrack = queueState.currentTrack || playback.track;
 
   return (
     <div className="playback-card">
@@ -133,7 +186,7 @@ export function PlaybackStatus() {
 
       <div className="track-section">
         <div className="track-label">Current Track</div>
-        {playback.track ? (
+        {activeTrack ? (
           <div className="track-info">
             <div className="track-icon-wrapper">
               <span className={`disc-icon ${playback.playerState === 'PLAYING' ? 'spinning' : ''}`}>
@@ -141,13 +194,13 @@ export function PlaybackStatus() {
               </span>
             </div>
             <div className="track-details">
-              <div className="track-name">{playback.track.name}</div>
-              {playback.track.artist && (
-                <div className="track-artist">{playback.track.artist}</div>
+              <div className="track-name">{activeTrack.name}</div>
+              {activeTrack.artist && (
+                <div className="track-artist">{activeTrack.artist}</div>
               )}
               <div className="track-meta">
                 <span className="track-duration">
-                  Duration: {formatDuration(playback.track.duration)}
+                  Duration: {formatDuration(activeTrack.duration)}
                 </span>
                 {playback.guildId && (
                   <span className="track-guild">Guild: {playback.guildId}</span>
@@ -158,7 +211,41 @@ export function PlaybackStatus() {
         ) : (
           <div className="no-track">
             <span>No track currently playing</span>
-            <small>Use <code>/play</code> in Discord to start local playback</small>
+            <small>Use <code>/play</code> in Discord to start playback</small>
+          </div>
+        )}
+      </div>
+
+      {/* Queue Section */}
+      <div className="queue-section">
+        <div className="queue-header">
+          <span className="queue-label">Upcoming Queue</span>
+          <span className="queue-count-badge">
+            {queueState.length} {queueState.length === 1 ? 'track' : 'tracks'}
+          </span>
+        </div>
+
+        {queueState.queue.length > 0 ? (
+          <div className="queue-list">
+            {queueState.queue.map((item) => (
+              <div key={item.id} className="queue-item">
+                <span className="queue-item-pos">{item.position}</span>
+                <div className="queue-item-details">
+                  <span className="queue-item-name">{item.name}</span>
+                  {item.addedBy && (
+                    <span className="queue-item-by">Added by {item.addedBy}</span>
+                  )}
+                </div>
+                <span className="queue-item-duration">
+                  {formatDuration(item.duration)}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="queue-empty">
+            <span>The queue is empty.</span>
+            <small>Use <code>/play</code> or <code>/addqueue</code> to queue more tracks</small>
           </div>
         )}
       </div>

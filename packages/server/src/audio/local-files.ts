@@ -24,3 +24,19 @@ export async function listLocalAudioFiles(): Promise<string[]> {
       return SUPPORTED_AUDIO_EXTENSIONS.includes(ext);
     });
 }
+
+/**
+ * List all subfolders in storage/music directory.
+ */
+export async function listLocalFolders(): Promise<string[]> {
+  const dir = getMusicStorageDir();
+  if (!fs.existsSync(dir)) {
+    return [];
+  }
+
+  const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+  return entries
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name);
+}
+

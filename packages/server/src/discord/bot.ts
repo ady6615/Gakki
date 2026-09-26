@@ -1,5 +1,5 @@
 import { Client, GatewayIntentBits } from 'discord.js';
-import type { AudioPlayerManager } from '@gakki/core';
+import type { AudioPlayerManager, PlaybackManager } from '@gakki/core';
 import { createLogger } from '@gakki/core';
 import {
   slashCommandDefinitions,
@@ -19,12 +19,12 @@ let client: Client | null = null;
  * - GuildVoiceStates: required for voice channel operations
  *
  * @param token - Discord bot token
- * @param playerManager - Optional AudioPlayerManager for handling voice commands
+ * @param playbackManager - Optional PlaybackManager or AudioPlayerManager for handling voice commands
  * @returns The connected Discord.js Client
  */
 export async function createDiscordBot(
   token: string,
-  playerManager?: AudioPlayerManager,
+  playbackManager?: PlaybackManager | AudioPlayerManager,
 ): Promise<Client> {
   client = new Client({
     intents: [
@@ -32,6 +32,11 @@ export async function createDiscordBot(
       GatewayIntentBits.GuildVoiceStates,
     ],
   });
+
+  const activeManager: PlaybackManager | undefined =
+    playbackManager && 'playbackManager' in playbackManager
+      ? (playbackManager as AudioPlayerManager).playbackManager
+      : (playbackManager as PlaybackManager | undefined);
 
   client.once('ready', async (readyClient) => {
     logger.info(
@@ -68,13 +73,13 @@ export async function createDiscordBot(
   });
 
   client.on('interactionCreate', async (interaction) => {
-    if (!playerManager) return;
+    if (!activeManager) return;
 
     try {
       if (interaction.isAutocomplete()) {
         await handleAutocomplete(interaction);
       } else if (interaction.isChatInputCommand()) {
-        await handleChatInputCommand(interaction, playerManager);
+        await handleChatInputCommand(interaction, activeManager);
       }
     } catch (err) {
       logger.error({ err }, '[ERROR] Unhandled error during interaction');

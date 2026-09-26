@@ -3,7 +3,8 @@ import {
   createLogger,
   connectDatabase,
   disconnectDatabase,
-  AudioPlayerManager,
+  QueueManager,
+  PlaybackManager,
 } from '@gakki/core';
 import { createApiServer } from './api/server';
 import { createDiscordBot, DiscordVoiceAdapter } from './discord';
@@ -12,15 +13,18 @@ import { createWebSocketServer } from './websocket';
 const logger = createLogger('main');
 
 async function main(): Promise<void> {
-  logger.info('Starting Gakki Music Platform — Phase 2...');
+  logger.info('Starting Gakki Music Platform — Phase 3 (Queue Management & Auto-Advance)...');
 
   // ── Configuration ──────────────────────────────────────────────
   const config = loadConfig();
   logger.info({ env: config.NODE_ENV, port: config.API_PORT }, 'Configuration loaded');
 
-  // ── Audio Engine ───────────────────────────────────────────────
-  const playerLogger = createLogger('audio-player');
-  const playerManager = new AudioPlayerManager(playerLogger);
+  // ── Queue & Playback Engines ────────────────────────────────────
+  const queueLogger = createLogger('queue-manager');
+  const queueManager = new QueueManager(queueLogger);
+
+  const playbackLogger = createLogger('playback-manager');
+  const playbackManager = new PlaybackManager(playbackLogger, queueManager);
 
   // ── Database ───────────────────────────────────────────────────
   let dbConnected = false;
@@ -32,18 +36,18 @@ async function main(): Promise<void> {
   }
 
   // ── API Server ─────────────────────────────────────────────────
-  const { server } = createApiServer(config.API_PORT, playerManager);
+  const { server } = createApiServer(config.API_PORT, playbackManager);
 
   // ── WebSocket ──────────────────────────────────────────────────
-  createWebSocketServer(server, playerManager);
+  createWebSocketServer(server, playbackManager);
 
   // ── Discord Bot & Voice Adapter ────────────────────────────────
   let discordConnected = false;
   if (config.DISCORD_TOKEN) {
     try {
-      const client = await createDiscordBot(config.DISCORD_TOKEN, playerManager);
+      const client = await createDiscordBot(config.DISCORD_TOKEN, playbackManager);
       const voiceAdapter = new DiscordVoiceAdapter(client);
-      playerManager.registerAdapter(voiceAdapter);
+      playbackManager.registerAdapter(voiceAdapter);
       discordConnected = true;
     } catch (error) {
       logger.error({ err: error }, 'Failed to start Discord bot — continuing without Discord');
@@ -60,7 +64,7 @@ async function main(): Promise<void> {
       api: `http://localhost:${config.API_PORT}`,
       ws: `ws://localhost:${config.API_PORT}/ws`,
     },
-    'Gakki startup complete',
+    'Gakki Phase 3 startup complete',
   );
 
   // ── Graceful Shutdown ─────────────────────────────────────────

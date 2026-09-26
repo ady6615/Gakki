@@ -50,8 +50,10 @@ export class DiscordVoiceAdapter implements VoicePlatformAdapter {
 
   private readonly stateListeners = new Set<StateChangeListener>();
   private readonly errorListeners = new Set<ErrorListener>();
+  private readonly trackEndListeners = new Set<(guildId: string) => void>();
 
   constructor(private readonly client: Client) {}
+
 
   /**
    * Join a voice channel in a guild and subscribe an audio player.
@@ -293,6 +295,10 @@ export class DiscordVoiceAdapter implements VoicePlatformAdapter {
     this.errorListeners.add(listener);
   }
 
+  onTrackEnd(listener: (guildId: string) => void): void {
+    this.trackEndListeners.add(listener);
+  }
+
   private getOrCreatePlayer(guildId: string): AudioPlayer {
     let player = this.players.get(guildId);
     if (player) return player;
@@ -312,10 +318,18 @@ export class DiscordVoiceAdapter implements VoicePlatformAdapter {
     });
 
     player.on(AudioPlayerStatus.Idle, () => {
-      logger.info({ guildId }, '[AUDIO] Stopped');
+      logger.info({ guildId }, '[AUDIO] Idle');
       this.currentTracks.set(guildId, null);
       this.setPlayerState(guildId, 'IDLE');
+      for (const listener of this.trackEndListeners) {
+        try {
+          listener(guildId);
+        } catch (err) {
+          logger.error({ err, guildId }, 'Error in trackEnd listener');
+        }
+      }
     });
+
 
     player.on('error', (error) => {
       logger.error({ err: error, guildId }, '[ERROR] Audio player error: %s', error.message);

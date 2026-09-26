@@ -5,15 +5,15 @@ import {
   type GuildMember,
   PermissionsBitField,
 } from 'discord.js';
-import type { AudioPlayerManager } from '@gakki/core';
+import type { AudioPlayerManager, PlaybackManager, QueueTrack } from '@gakki/core';
 import {
   LocalAudioSource,
-  VoiceChannelRequiredError,
   VoicePermissionError,
   createLogger,
 } from '@gakki/core';
 import { probeAudioMetadata } from '../audio/ffmpeg';
-import { listLocalAudioFiles } from '../audio/local-files';
+import { listLocalAudioFiles, listLocalFolders } from '../audio/local-files';
+import { enqueueFolder, enqueueMultipleFiles } from '../audio/batch-loader';
 
 const logger = createLogger('discord-commands');
 
@@ -21,24 +21,53 @@ const logger = createLogger('discord-commands');
  * Format duration in seconds to M:SS.
  */
 export function formatDuration(seconds: number | null | undefined): string {
-  if (seconds == null) return 'Unknown';
+  if (seconds == null || isNaN(seconds)) return 'Unknown';
   const mins = Math.floor(seconds / 60);
   const secs = Math.floor(seconds % 60);
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
 export const slashCommandDefinitions = [
+
   new SlashCommandBuilder()
     .setName('join')
     .setDescription('Join your current voice channel'),
 
   new SlashCommandBuilder()
     .setName('play')
-    .setDescription('Play a local audio file')
+    .setDescription('Play a local audio file or add to queue if already playing')
     .addStringOption((option) =>
       option
         .setName('file')
         .setDescription('File name in storage/music (e.g. test.mp3)')
+        .setRequired(false)
+        .setAutocomplete(true),
+    ),
+
+  new SlashCommandBuilder()
+    .setName('queue')
+    .setDescription('Display the current playback queue'),
+
+  new SlashCommandBuilder()
+    .setName('addqueue')
+    .setDescription('Add multiple files or an entire folder to the queue')
+    .addStringOption((option) =>
+      option
+        .setName('file')
+        .setDescription('Single audio file to add')
+        .setRequired(false)
+        .setAutocomplete(true),
+    )
+    .addStringOption((option) =>
+      option
+        .setName('files')
+        .setDescription('Multiple audio files (e.g. "01.mp3, 02.mp3")')
+        .setRequired(false),
+    )
+    .addStringOption((option) =>
+      option
+        .setName('folder')
+        .setDescription('Folder name in storage/music (e.g. my-playlist)')
         .setRequired(false)
         .setAutocomplete(true),
     ),
@@ -53,7 +82,7 @@ export const slashCommandDefinitions = [
 
   new SlashCommandBuilder()
     .setName('skip')
-    .setDescription('Stop the current track'),
+    .setDescription('Skip the current track and play the next in queue'),
 
   new SlashCommandBuilder()
     .setName('leave')
@@ -65,12 +94,13 @@ export const slashCommandDefinitions = [
 ];
 
 /**
- * Handle slash command autocompletion for /play file option.
+ * Handle slash command autocompletion for /play and /addqueue options.
  */
 export async function handleAutocomplete(
   interaction: AutocompleteInteraction,
 ): Promise<void> {
   const focusedOption = interaction.options.getFocused(true);
+
   if (focusedOption.name === 'file') {
     const files = await listLocalAudioFiles();
     const query = (focusedOption.value || '').toLowerCase();
@@ -81,6 +111,16 @@ export async function handleAutocomplete(
     await interaction.respond(
       filtered.map((file) => ({ name: file, value: file })),
     );
+  } else if (focusedOption.name === 'folder') {
+    const folders = await listLocalFolders();
+    const query = (focusedOption.value || '').toLowerCase();
+    const filtered = folders
+      .filter((folder) => folder.toLowerCase().includes(query))
+      .slice(0, 25);
+
+    await interaction.respond(
+      filtered.map((folder) => ({ name: folder, value: folder })),
+    );
   }
 }
 
@@ -89,9 +129,15 @@ export async function handleAutocomplete(
  */
 export async function handleChatInputCommand(
   interaction: ChatInputCommandInteraction,
-  playerManager: AudioPlayerManager,
+  manager: PlaybackManager | AudioPlayerManager,
 ): Promise<void> {
+  const playbackManager: PlaybackManager =
+    'playbackManager' in manager
+      ? (manager as AudioPlayerManager).playbackManager
+      : (manager as PlaybackManager);
+
   const { commandName, guildId } = interaction;
+
 
   if (!guildId) {
     await interaction.reply({
@@ -132,7 +178,7 @@ export async function handleChatInputCommand(
 
       await interaction.deferReply();
       try {
-        await playerManager.join(guildId, userVoiceChannel.id);
+        await playbackManager.join(guildId, userVoiceChannel.id);
         await interaction.editReply(`Joined voice channel **${userVoiceChannel.name}**.`);
       } catch (error) {
         logger.error({ err: error, guildId }, '[ERROR] Failed to join voice channel');
@@ -148,15 +194,14 @@ export async function handleChatInputCommand(
     case 'play': {
       await interaction.deferReply();
 
-      // Check if user is in a voice channel
-      const currentState = playerManager.getState(guildId);
+      // Check if bot is connected, or join user voice channel
+      const currentState = playbackManager.getState(guildId);
       if (currentState.voiceState !== 'CONNECTED') {
         if (!userVoiceChannel) {
           await interaction.editReply('You must be in a voice channel to play music.');
           return;
         }
 
-        // Check permissions before joining
         const me = interaction.guild?.members.me;
         if (me) {
           const perms = userVoiceChannel.permissionsFor(me);
@@ -172,7 +217,7 @@ export async function handleChatInputCommand(
         }
 
         try {
-          await playerManager.join(guildId, userVoiceChannel.id);
+          await playbackManager.join(guildId, userVoiceChannel.id);
         } catch (error) {
           logger.error({ err: error, guildId }, '[ERROR] Failed to join voice before play');
           await interaction.editReply(`Failed to join voice channel: ${(error as Error).message}`);
@@ -188,7 +233,7 @@ export async function handleChatInputCommand(
           await interaction.editReply('No local audio files found in storage/music directory.');
           return;
         }
-        inputFileName = available[0]; // defaults to first available file, e.g. test.mp3
+        inputFileName = available[0];
       }
 
       const source = new LocalAudioSource(inputFileName, undefined, probeAudioMetadata);
@@ -203,12 +248,25 @@ export async function handleChatInputCommand(
 
       try {
         const metadata = await source.getMetadata();
-        await playerManager.play(guildId, source);
-
         const durationStr = formatDuration(metadata.duration);
-        await interaction.editReply(
-          `Now playing: **${metadata.title}**${metadata.artist ? ` by **${metadata.artist}**` : ''} \`[${durationStr}]\``,
-        );
+
+        const playResult = await playbackManager.play(guildId, source, {
+          name: metadata.title,
+          path: inputFileName,
+          duration: metadata.duration ?? undefined,
+          artist: metadata.artist,
+          addedBy: member.displayName || member.user?.username,
+        });
+
+        if (playResult.status === 'started') {
+          await interaction.editReply(
+            `▶️ Started: **${metadata.title}**${metadata.artist ? ` by **${metadata.artist}**` : ''} \`[${durationStr}]\``,
+          );
+        } else {
+          await interaction.editReply(
+            `➕ Added to queue: **${metadata.title}**${metadata.artist ? ` by **${metadata.artist}**` : ''}\nPosition: **${playResult.position}**`,
+          );
+        }
       } catch (error) {
         logger.error({ err: error, guildId }, '[ERROR] Playback failed');
         await interaction.editReply(`Playback failed: ${(error as Error).message}`);
@@ -216,8 +274,75 @@ export async function handleChatInputCommand(
       break;
     }
 
+    case 'queue': {
+      const currentTrack = playbackManager.getCurrentTrack(guildId);
+      const queueItems = playbackManager.queueManager.getDisplayQueue(guildId);
+
+      if (!currentTrack && queueItems.length === 0) {
+        await interaction.reply('The queue is empty.');
+        return;
+      }
+
+      let response = '';
+      if (currentTrack) {
+        const dur = formatDuration(currentTrack.duration);
+        response += `🎵 **Now Playing**\n${currentTrack.name} \`[${dur}]\`\n\n`;
+      } else {
+        response += `🎵 **Now Playing**\n*Nothing currently playing*\n\n`;
+      }
+
+      if (queueItems.length > 0) {
+        response += `**Queue:**\n`;
+        const preview = queueItems.slice(0, 10);
+        for (const item of preview) {
+          const itemDur = item.duration ? ` \`[${formatDuration(item.duration)}]\`` : '';
+          response += `${item.position}. ${item.name}${itemDur}\n`;
+        }
+
+        if (queueItems.length > 10) {
+          response += `*...and ${queueItems.length - 10} more*\n`;
+        }
+        response += `\n*${queueItems.length} track${queueItems.length === 1 ? '' : 's'} queued*`;
+      } else {
+        response += `The queue is empty.`;
+      }
+
+      await interaction.reply({ content: response });
+      break;
+    }
+
+    case 'addqueue': {
+      await interaction.deferReply();
+      const folder = interaction.options.getString('folder');
+      const file = interaction.options.getString('file');
+      const filesInput = interaction.options.getString('files');
+
+      let addedTracks: QueueTrack[] = [];
+      const userTag = member.displayName || member.user?.username;
+
+      try {
+        if (folder) {
+          addedTracks = await enqueueFolder(guildId, folder, playbackManager.queueManager, userTag);
+        } else if (filesInput) {
+          const rawList = filesInput.includes(',') ? filesInput.split(',') : filesInput.split(/\s+/);
+          addedTracks = await enqueueMultipleFiles(guildId, rawList, playbackManager.queueManager, userTag);
+        } else if (file) {
+          addedTracks = await enqueueMultipleFiles(guildId, [file], playbackManager.queueManager, userTag);
+        } else {
+          await interaction.editReply('Please specify a `file`, `files`, or `folder` to add to the queue.');
+          return;
+        }
+
+        await interaction.editReply(`➕ Added **${addedTracks.length}** track(s) to the queue.`);
+      } catch (err: any) {
+        logger.error({ err, guildId }, '[ERROR] Failed to add tracks to queue');
+        await interaction.editReply(`Failed to add tracks: ${err.message}`);
+      }
+      break;
+    }
+
     case 'pause': {
-      const state = playerManager.getState(guildId);
+      const state = playbackManager.getState(guildId);
       if (state.playerState !== 'PLAYING') {
         await interaction.reply({
           content: 'No audio is currently playing.',
@@ -226,7 +351,7 @@ export async function handleChatInputCommand(
         return;
       }
 
-      const paused = playerManager.pause(guildId);
+      const paused = playbackManager.pause(guildId);
       if (paused) {
         await interaction.reply('Playback paused.');
       } else {
@@ -239,7 +364,7 @@ export async function handleChatInputCommand(
     }
 
     case 'resume': {
-      const state = playerManager.getState(guildId);
+      const state = playbackManager.getState(guildId);
       if (state.playerState !== 'PAUSED') {
         await interaction.reply({
           content: 'Audio is not currently paused.',
@@ -248,7 +373,7 @@ export async function handleChatInputCommand(
         return;
       }
 
-      const resumed = playerManager.resume(guildId);
+      const resumed = playbackManager.resume(guildId);
       if (resumed) {
         await interaction.reply('Playback resumed.');
       } else {
@@ -261,8 +386,8 @@ export async function handleChatInputCommand(
     }
 
     case 'skip': {
-      const state = playerManager.getState(guildId);
-      if (state.playerState === 'IDLE') {
+      const skipResult = await playbackManager.skip(guildId);
+      if (!skipResult.skipped) {
         await interaction.reply({
           content: 'No audio is currently playing to skip.',
           ephemeral: true,
@@ -270,13 +395,19 @@ export async function handleChatInputCommand(
         return;
       }
 
-      playerManager.skip(guildId);
-      await interaction.reply('Track skipped (stopped).');
+      if (skipResult.nowPlaying) {
+        const dur = formatDuration(skipResult.nowPlaying.duration);
+        await interaction.reply(
+          `⏭️ Skipped track. Now playing: **${skipResult.nowPlaying.name}** \`[${dur}]\``,
+        );
+      } else {
+        await interaction.reply('⏭️ Skipped track. The queue is now empty.');
+      }
       break;
     }
 
     case 'leave': {
-      const state = playerManager.getState(guildId);
+      const state = playbackManager.getState(guildId);
       if (state.voiceState === 'DISCONNECTED') {
         await interaction.reply({
           content: 'Not currently connected to any voice channel.',
@@ -285,21 +416,23 @@ export async function handleChatInputCommand(
         return;
       }
 
-      await playerManager.leave(guildId);
+      await playbackManager.leave(guildId);
       await interaction.reply('Disconnected from voice channel.');
       break;
     }
 
     case 'nowplaying': {
-      const state = playerManager.getState(guildId);
-      if (!state.track || state.playerState === 'IDLE') {
+      const currentTrack = playbackManager.getCurrentTrack(guildId);
+      const state = playbackManager.getState(guildId);
+
+      if (!currentTrack || state.playerState === 'IDLE') {
         await interaction.reply('Nothing is currently playing.');
         return;
       }
 
-      const durationStr = formatDuration(state.track.duration);
+      const durationStr = formatDuration(currentTrack.duration);
       await interaction.reply({
-        content: `**Now Playing:** ${state.track.name}${state.track.artist ? ` — *${state.track.artist}*` : ''}\n**Status:** ${state.playerState}\n**Duration:** \`${durationStr}\``,
+        content: `**Now Playing:** ${currentTrack.name}${currentTrack.artist ? ` — *${currentTrack.artist}*` : ''}\n**Status:** ${state.playerState}\n**Duration:** \`${durationStr}\``,
       });
       break;
     }

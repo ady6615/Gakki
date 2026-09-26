@@ -1,6 +1,11 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import type { Server } from 'node:http';
-import type { AudioPlayerManager, VoicePlatformState } from '@gakki/core';
+import type {
+  AudioPlayerManager,
+  PlaybackManager,
+  VoicePlatformState,
+  QueueUpdatedEvent,
+} from '@gakki/core';
 import { createLogger } from '@gakki/core';
 
 const logger = createLogger('websocket');
@@ -12,6 +17,7 @@ let lastKnownState: VoicePlatformState = {
   playerState: 'IDLE',
   track: null,
 };
+const lastKnownQueues = new Map<string, QueueUpdatedEvent>();
 
 /**
  * Broadcast playback state to all connected WebSocket clients.
@@ -31,7 +37,31 @@ export function broadcastPlaybackState(state: VoicePlatformState): void {
       try {
         client.send(message);
       } catch (err) {
-        logger.error({ err }, 'Failed to send WebSocket message to client');
+        logger.error({ err }, 'Failed to send playback_state to WebSocket client');
+      }
+    }
+  }
+}
+
+/**
+ * Broadcast queue update event to all connected WebSocket clients.
+ */
+export function broadcastQueueUpdated(event: QueueUpdatedEvent): void {
+  lastKnownQueues.set(event.guildId, event);
+  if (!wssInstance) return;
+
+  const message = JSON.stringify({
+    type: 'queue.updated',
+    ...event,
+    timestamp: new Date().toISOString(),
+  });
+
+  for (const client of wssInstance.clients) {
+    if (client.readyState === WebSocket.OPEN) {
+      try {
+        client.send(message);
+      } catch (err) {
+        logger.error({ err }, 'Failed to send queue.updated to WebSocket client');
       }
     }
   }
@@ -45,10 +75,15 @@ export function broadcastPlaybackState(state: VoicePlatformState): void {
  */
 export function createWebSocketServer(
   httpServer: Server,
-  playerManager?: AudioPlayerManager,
+  manager?: PlaybackManager | AudioPlayerManager,
 ): WebSocketServer {
   const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
   wssInstance = wss;
+
+  const activePlaybackManager: PlaybackManager | undefined =
+    manager && 'playbackManager' in manager
+      ? (manager as AudioPlayerManager).playbackManager
+      : (manager as PlaybackManager | undefined);
 
   wss.on('connection', (ws) => {
     logger.info('WebSocket client connected');
@@ -61,7 +96,7 @@ export function createWebSocketServer(
       logger.error({ err: error }, 'WebSocket client error');
     });
 
-    // Send connection ack
+    // 1. Connection acknowledgement
     ws.send(
       JSON.stringify({
         type: 'connected',
@@ -69,11 +104,10 @@ export function createWebSocketServer(
       }),
     );
 
-    // Send current playback state immediately
-    const stateToSend: VoicePlatformState =
-      playerManager && playerManager.getAllStates().length > 0
-        ? playerManager.getAllStates()[0]
-        : lastKnownState;
+    // 2. Initial playback state
+    const stateToSend = activePlaybackManager
+      ? activePlaybackManager.getState('')
+      : lastKnownState;
 
     ws.send(
       JSON.stringify({
@@ -82,12 +116,37 @@ export function createWebSocketServer(
         timestamp: new Date().toISOString(),
       }),
     );
+
+    // 3. Initial queue state
+    let initialQueueEvent: QueueUpdatedEvent | null = null;
+    if (activePlaybackManager) {
+      const activeGuilds = Array.from(lastKnownQueues.keys());
+      if (activeGuilds.length > 0) {
+        initialQueueEvent = activePlaybackManager.getQueueEvent(activeGuilds[0]);
+      } else {
+        initialQueueEvent = activePlaybackManager.getQueueEvent('');
+      }
+    }
+
+    if (initialQueueEvent) {
+      ws.send(
+        JSON.stringify({
+          type: 'queue.updated',
+          ...initialQueueEvent,
+          timestamp: new Date().toISOString(),
+        }),
+      );
+    }
   });
 
-  // If playerManager is passed, listen to state changes and broadcast
-  if (playerManager) {
-    playerManager.onStateChange((state) => {
+  // Listen for playback and queue updates
+  if (activePlaybackManager) {
+    activePlaybackManager.onStateChange((state) => {
       broadcastPlaybackState(state);
+    });
+
+    activePlaybackManager.onQueueUpdate((event) => {
+      broadcastQueueUpdated(event);
     });
   }
 
