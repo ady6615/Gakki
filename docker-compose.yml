@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: gakki-db
+    environment:
+      POSTGRES_USER: gakki
+      POSTGRES_PASSWORD: gakki
+      POSTGRES_DB: gakki
+    ports:
+      - "5432:5432"
+    volumes:
+      - gakki_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gakki"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  gakki_pgdata:

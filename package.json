@@ -1,0 +1,20 @@
+{
+  "name": "gakki",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A modular music and voice platform powered by AI, with Discord and future cross-platform support",
+  "workspaces": [
+    "packages/core",
+    "packages/server",
+    "packages/web"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w @gakki/server",
+    "dev:web": "npm run dev -w @gakki/web",
+    "build": "npm run build -w @gakki/core && npm run build -w @gakki/server && npm run build -w @gakki/web",
+    "typecheck": "tsc --noEmit -p packages/core/tsconfig.json && tsc --noEmit -p packages/server/tsconfig.json"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
