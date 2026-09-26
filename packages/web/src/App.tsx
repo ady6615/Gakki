@@ -1,4 +1,5 @@
 import { HealthCheck } from './components/HealthCheck';
+import { PlaybackStatus } from './components/PlaybackStatus';
 
 function App() {
   return (
@@ -12,11 +13,12 @@ function App() {
       </header>
 
       <main className="app-main">
+        <PlaybackStatus />
         <HealthCheck />
       </main>
 
       <footer className="app-footer">
-        <p>Gakki v0.1.0 — Phase 1</p>
+        <p>Gakki v0.2.0 — Phase 2 Voice Playback</p>
       </footer>
     </div>
   );

@@ -1,6 +1,7 @@
 import express from 'express';
 import http from 'node:http';
 import cors from 'cors';
+import type { AudioPlayerManager } from '@gakki/core';
 import { createLogger } from '@gakki/core';
 import { createRoutes } from './routes';
 import { errorHandler } from './middleware/error-handler';
@@ -13,7 +14,10 @@ const logger = createLogger('api');
  * Returns the raw http.Server so the WebSocket server can attach to it,
  * sharing the same port.
  */
-export function createApiServer(port: number): { app: express.Application; server: http.Server } {
+export function createApiServer(
+  port: number,
+  playerManager?: AudioPlayerManager,
+): { app: express.Application; server: http.Server } {
   const app = express();
 
   // Middleware
@@ -21,7 +25,7 @@ export function createApiServer(port: number): { app: express.Application; serve
   app.use(express.json());
 
   // Routes
-  app.use('/api', createRoutes());
+  app.use('/api', createRoutes(playerManager));
 
   // Error handling (must be registered last)
   app.use(errorHandler);

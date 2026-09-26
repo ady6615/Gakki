@@ -22,13 +22,18 @@ export { createLogger } from './utils/logger';
 export { loadConfig } from './utils/config';
 export type { AppConfig } from './utils/config';
 
+// Audio
+export * from './audio';
+
 // Managers
 export { QueueManager } from './managers/queue.manager';
 export { TrackManager } from './managers/track.manager';
 export { PlaylistManager } from './managers/playlist.manager';
 export { PlaybackManager } from './managers/playback.manager';
+export { AudioPlayerManager } from './managers/audio-player.manager';
 export { AudioSourceManager } from './managers/audio-source.manager';
 export { AnalyticsManager } from './managers/analytics.manager';
 export { AiRecommendationManager } from './managers/ai-recommendation.manager';
 export { LyricsManager } from './managers/lyrics.manager';
 export { RecordingManager } from './managers/recording.manager';
+

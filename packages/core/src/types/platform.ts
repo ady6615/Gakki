@@ -8,6 +8,9 @@
  * with the Gakki core engine.
  */
 
+import type { AudioSource } from '../audio/audio-source';
+import type { AudioTrackInfo, PlaybackStatus, VoiceConnectionStatus, VoicePlatformState } from './audio';
+
 /** Connection state for a platform adapter */
 export type PlatformConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';
 
@@ -23,10 +26,6 @@ export interface VoiceChannelInfo {
  *
  * The core engine interacts with platforms exclusively through this interface,
  * ensuring zero coupling to any specific platform's API.
- *
- * Phase 1 defines connection lifecycle only. Audio playback methods
- * (play, pause, stop, join/leave voice) will be added when the
- * playback pipeline is implemented.
  */
 export interface PlatformAdapter {
   /** Unique identifier for this platform (e.g., 'discord', 'desktop') */
@@ -44,3 +43,28 @@ export interface PlatformAdapter {
   /** Check if connected and ready */
   isConnected(): boolean;
 }
+
+/**
+ * Interface for platform voice adapters (Discord, Google Meet, Desktop audio).
+ * Handles voice channel joining, leaving, and audio player subscription.
+ */
+export interface VoicePlatformAdapter {
+  readonly platform: string;
+
+  joinVoice(guildId: string, channelId: string, options?: unknown): Promise<void>;
+  leaveVoice(guildId: string): Promise<void>;
+  getVoiceStatus(guildId: string): VoiceConnectionStatus;
+
+  play(guildId: string, source: AudioSource): Promise<void>;
+  pause(guildId: string): boolean;
+  resume(guildId: string): boolean;
+  stop(guildId: string): boolean;
+
+  getPlaybackStatus(guildId: string): PlaybackStatus;
+  getCurrentTrack(guildId: string): AudioTrackInfo | null;
+  getState(guildId: string): VoicePlatformState;
+
+  onStateChange(listener: (state: VoicePlatformState) => void): void;
+  onError(listener: (guildId: string, error: Error) => void): void;
+}
+

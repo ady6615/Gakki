@@ -1,5 +1,11 @@
 import { Client, GatewayIntentBits } from 'discord.js';
+import type { AudioPlayerManager } from '@gakki/core';
 import { createLogger } from '@gakki/core';
+import {
+  slashCommandDefinitions,
+  handleChatInputCommand,
+  handleAutocomplete,
+} from './commands';
 
 const logger = createLogger('discord');
 
@@ -12,14 +18,14 @@ let client: Client | null = null;
  * - Guilds: required for guild membership
  * - GuildVoiceStates: required for voice channel operations
  *
- * Additional intents (e.g., MessageContent) should be added only
- * when specific features require them.
- *
  * @param token - Discord bot token
+ * @param playerManager - Optional AudioPlayerManager for handling voice commands
  * @returns The connected Discord.js Client
- * @throws If login fails (invalid token, network error, etc.)
  */
-export async function createDiscordBot(token: string): Promise<Client> {
+export async function createDiscordBot(
+  token: string,
+  playerManager?: AudioPlayerManager,
+): Promise<Client> {
   client = new Client({
     intents: [
       GatewayIntentBits.Guilds,
@@ -27,11 +33,60 @@ export async function createDiscordBot(token: string): Promise<Client> {
     ],
   });
 
-  client.once('ready', (readyClient) => {
+  client.once('ready', async (readyClient) => {
     logger.info(
       { tag: readyClient.user.tag, guilds: readyClient.guilds.cache.size },
       'Discord bot ready',
     );
+
+    // Register slash commands
+    try {
+      logger.info('Registering slash commands with Discord API...');
+      await readyClient.application.commands.set(slashCommandDefinitions);
+      logger.info('Global slash commands registered successfully');
+
+      for (const guild of readyClient.guilds.cache.values()) {
+        try {
+          await guild.commands.set(slashCommandDefinitions);
+          logger.debug({ guildId: guild.id }, 'Guild slash commands registered');
+        } catch (gErr) {
+          logger.warn({ err: gErr, guildId: guild.id }, 'Failed to set commands on guild');
+        }
+      }
+    } catch (cmdErr) {
+      logger.error({ err: cmdErr }, 'Failed to register slash commands');
+    }
+  });
+
+  client.on('guildCreate', async (guild) => {
+    try {
+      await guild.commands.set(slashCommandDefinitions);
+      logger.info({ guildId: guild.id, name: guild.name }, 'Slash commands registered on joined guild');
+    } catch (err) {
+      logger.warn({ err, guildId: guild.id }, 'Failed to register commands on new guild');
+    }
+  });
+
+  client.on('interactionCreate', async (interaction) => {
+    if (!playerManager) return;
+
+    try {
+      if (interaction.isAutocomplete()) {
+        await handleAutocomplete(interaction);
+      } else if (interaction.isChatInputCommand()) {
+        await handleChatInputCommand(interaction, playerManager);
+      }
+    } catch (err) {
+      logger.error({ err }, '[ERROR] Unhandled error during interaction');
+      if (interaction.isRepliable()) {
+        const errorMsg = 'An unexpected error occurred while executing this command.';
+        if (interaction.deferred || interaction.replied) {
+          await interaction.editReply(errorMsg).catch(() => {});
+        } else {
+          await interaction.reply({ content: errorMsg, ephemeral: true }).catch(() => {});
+        }
+      }
+    }
   });
 
   client.on('error', (error) => {
