@@ -611,4 +611,44 @@ body {
   font-family: monospace;
 }
 
+/* ── Audio Effects Bar ───────────────────────────────────────────── */
+
+.effects-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.effect-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.65rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  transition: all 0.2s ease;
+}
+
+.effect-chip.active {
+  background: rgba(124, 92, 252, 0.15);
+  border-color: rgba(124, 92, 252, 0.4);
+  color: #c084fc;
+}
+
+.effect-chip.timer-chip {
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.35);
+  color: #fbbf24;
+}
+
+.chip-icon {
+  font-size: 0.85rem;
+}
+
+
 

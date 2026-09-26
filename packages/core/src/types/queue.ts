@@ -69,5 +69,55 @@ export interface QueueState {
   repeatMode: RepeatMode;
 }
 
-/** Queue repeat modes */
+/** Queue repeat / loop modes */
 export type RepeatMode = 'off' | 'track' | 'queue';
+export type LoopMode = 'off' | 'track' | 'queue';
+
+/**
+ * Reusable audio filter configuration for DSP processing.
+ */
+export interface AudioFilterConfig {
+  bassboost: boolean;
+  speed: number;
+  nightcore: boolean;
+}
+
+/**
+ * Authoritative guild playback state.
+ */
+export interface GuildPlaybackState {
+  guildId: string;
+  currentTrack?: QueueTrack | null;
+  volume: number; // 0 to 200, default 100
+  filters: AudioFilterConfig;
+  loopMode: LoopMode;
+  stayInChannel: boolean;
+  voiceIdleTimerActive: boolean;
+  voiceIdleReason?: 'empty_channel' | 'queue_empty' | null;
+  timeoutSeconds?: number;
+}
+
+/**
+ * Playback settings update event broadcast to WebSocket clients.
+ */
+export interface PlaybackSettingsUpdatedEvent {
+  type: 'playback.settings.updated';
+  guildId: string;
+  volume: number;
+  filters: AudioFilterConfig;
+  loopMode: LoopMode;
+  stayInChannel: boolean;
+}
+
+/**
+ * Voice lifecycle update event broadcast to WebSocket clients.
+ */
+export interface VoiceLifecycleUpdatedEvent {
+  type: 'voice.lifecycle.updated';
+  guildId: string;
+  humanCount: number;
+  timerActive: boolean;
+  reason?: 'empty_channel' | 'queue_empty' | null;
+  stayInChannel: boolean;
+}
+

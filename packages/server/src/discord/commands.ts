@@ -5,7 +5,7 @@ import {
   type GuildMember,
   PermissionsBitField,
 } from 'discord.js';
-import type { AudioPlayerManager, PlaybackManager, QueueTrack } from '@gakki/core';
+import type { AudioPlayerManager, PlaybackManager, QueueTrack, LoopMode } from '@gakki/core';
 import {
   LocalAudioSource,
   VoicePermissionError,
@@ -91,6 +91,124 @@ export const slashCommandDefinitions = [
   new SlashCommandBuilder()
     .setName('nowplaying')
     .setDescription('Show information about the currently playing track'),
+
+  new SlashCommandBuilder()
+    .setName('volume')
+    .setDescription('Set playback volume (0 to 200%)')
+    .addIntegerOption((option) =>
+      option
+        .setName('level')
+        .setDescription('Volume level from 0 to 200 (100 is normal)')
+        .setRequired(true)
+        .setMinValue(0)
+        .setMaxValue(200),
+    ),
+
+  new SlashCommandBuilder()
+    .setName('bassboost')
+    .setDescription('Toggle audio bass boost filter')
+    .addStringOption((option) =>
+      option
+        .setName('mode')
+        .setDescription('Turn bass boost on or off')
+        .setRequired(true)
+        .addChoices(
+          { name: 'On', value: 'on' },
+          { name: 'Off', value: 'off' },
+        ),
+    ),
+
+  new SlashCommandBuilder()
+    .setName('speed')
+    .setDescription('Set playback speed multiplier (0.5x to 2.0x)')
+    .addNumberOption((option) =>
+      option
+        .setName('value')
+        .setDescription('Speed multiplier between 0.5 and 2.0')
+        .setRequired(true)
+        .setMinValue(0.5)
+        .setMaxValue(2.0),
+    ),
+
+  new SlashCommandBuilder()
+    .setName('nightcore')
+    .setDescription('Toggle nightcore audio effect (pitch shift and speed up)')
+    .addStringOption((option) =>
+      option
+        .setName('mode')
+        .setDescription('Turn nightcore mode on or off')
+        .setRequired(true)
+        .addChoices(
+          { name: 'On', value: 'on' },
+          { name: 'Off', value: 'off' },
+        ),
+    ),
+
+  new SlashCommandBuilder()
+    .setName('shuffle')
+    .setDescription('Shuffle all tracks currently in the queue'),
+
+  new SlashCommandBuilder()
+    .setName('remove')
+    .setDescription('Remove a track from the queue by its position number')
+    .addIntegerOption((option) =>
+      option
+        .setName('index')
+        .setDescription('Track position in queue (1, 2, ...)')
+        .setRequired(true)
+        .setMinValue(1),
+    ),
+
+  new SlashCommandBuilder()
+    .setName('clear')
+    .setDescription('Clear all queued tracks without stopping the current track'),
+
+  new SlashCommandBuilder()
+    .setName('move')
+    .setDescription('Move a queued track from one position to another')
+    .addIntegerOption((option) =>
+      option
+        .setName('from')
+        .setDescription('Current track position in queue')
+        .setRequired(true)
+        .setMinValue(1),
+    )
+    .addIntegerOption((option) =>
+      option
+        .setName('to')
+        .setDescription('Target position in queue')
+        .setRequired(true)
+        .setMinValue(1),
+    ),
+
+  new SlashCommandBuilder()
+    .setName('loop')
+    .setDescription('Set queue / track repetition mode')
+    .addStringOption((option) =>
+      option
+        .setName('mode')
+        .setDescription('Repeat mode')
+        .setRequired(true)
+        .addChoices(
+          { name: 'Off', value: 'off' },
+          { name: 'Track (repeat current song)', value: 'track' },
+          { name: 'Queue (repeat entire queue)', value: 'queue' },
+        ),
+    ),
+
+  new SlashCommandBuilder()
+    .setName('stay')
+    .setDescription('Set whether bot stays in voice channel indefinitely')
+    .addStringOption((option) =>
+      option
+        .setName('mode')
+        .setDescription('Turn stay-in-channel mode on or off')
+        .setRequired(true)
+        .addChoices(
+          { name: 'On', value: 'on' },
+          { name: 'Off', value: 'off' },
+        ),
+    ),
 ];
 
 /**
@@ -434,6 +552,176 @@ export async function handleChatInputCommand(
       await interaction.reply({
         content: `**Now Playing:** ${currentTrack.name}${currentTrack.artist ? ` — *${currentTrack.artist}*` : ''}\n**Status:** ${state.playerState}\n**Duration:** \`${durationStr}\``,
       });
+      break;
+    }
+
+    case 'volume': {
+      const level = interaction.options.getInteger('level');
+      if (level === null || level < 0 || level > 200) {
+        await interaction.reply({
+          content: 'Volume must be an integer between 0 and 200.',
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const updatedVolume = playbackManager.setVolume(guildId, level);
+      await interaction.reply(`🔊 Volume set to **${updatedVolume}%**`);
+      break;
+    }
+
+    case 'bassboost': {
+      const mode = interaction.options.getString('mode', true);
+      const enabled = mode === 'on';
+
+      await interaction.deferReply();
+      try {
+        await playbackManager.setBassboost(guildId, enabled);
+        await interaction.editReply(`🎚️ Bassboost turned **${enabled ? 'ON' : 'OFF'}**`);
+      } catch (err: any) {
+        await interaction.editReply(`Failed to update bassboost: ${err.message}`);
+      }
+      break;
+    }
+
+    case 'speed': {
+      const value = interaction.options.getNumber('value', true);
+      if (value < 0.5 || value > 2.0) {
+        await interaction.reply({
+          content: 'Speed must be between 0.5 and 2.0.',
+          ephemeral: true,
+        });
+        return;
+      }
+
+      await interaction.deferReply();
+      try {
+        const updated = await playbackManager.setSpeed(guildId, value);
+        await interaction.editReply(`⏩ Playback speed set to **${updated.speed}x**`);
+      } catch (err: any) {
+        await interaction.editReply(`Failed to update speed: ${err.message}`);
+      }
+      break;
+    }
+
+    case 'nightcore': {
+      const mode = interaction.options.getString('mode', true);
+      const enabled = mode === 'on';
+
+      await interaction.deferReply();
+      try {
+        await playbackManager.setNightcore(guildId, enabled);
+        await interaction.editReply(`✨ Nightcore mode turned **${enabled ? 'ON' : 'OFF'}**`);
+      } catch (err: any) {
+        await interaction.editReply(`Failed to update nightcore: ${err.message}`);
+      }
+      break;
+    }
+
+    case 'shuffle': {
+      const count = playbackManager.queueManager.getQueueLength(guildId);
+      if (count <= 1) {
+        await interaction.reply({
+          content: 'Not enough tracks in the queue to shuffle.',
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const shuffled = playbackManager.shuffleQueue(guildId);
+      if (shuffled) {
+        await interaction.reply(`🔀 Shuffled **${count}** tracks in the queue.`);
+      } else {
+        await interaction.reply({
+          content: 'Could not shuffle the queue.',
+          ephemeral: true,
+        });
+      }
+      break;
+    }
+
+    case 'remove': {
+      const index = interaction.options.getInteger('index', true);
+      const length = playbackManager.queueManager.getQueueLength(guildId);
+
+      if (index < 1 || index > length) {
+        await interaction.reply({
+          content: `Invalid track position. Please choose a number between 1 and ${length}.`,
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const removed = playbackManager.removeQueueTrack(guildId, index);
+      if (removed) {
+        await interaction.reply(`🗑️ Removed track #${index}: **${removed.name}** from the queue.`);
+      } else {
+        await interaction.reply({
+          content: `Failed to remove track at position ${index}.`,
+          ephemeral: true,
+        });
+      }
+      break;
+    }
+
+    case 'clear': {
+      const length = playbackManager.queueManager.getQueueLength(guildId);
+      playbackManager.clearQueue(guildId);
+      await interaction.reply(`🧹 Cleared **${length}** track${length === 1 ? '' : 's'} from the queue.`);
+      break;
+    }
+
+    case 'move': {
+      const from = interaction.options.getInteger('from', true);
+      const to = interaction.options.getInteger('to', true);
+      const length = playbackManager.queueManager.getQueueLength(guildId);
+
+      if (from < 1 || from > length || to < 1 || to > length) {
+        await interaction.reply({
+          content: `Positions must be between 1 and ${length}.`,
+          ephemeral: true,
+        });
+        return;
+      }
+
+      if (from === to) {
+        await interaction.reply({
+          content: 'Track is already at that position.',
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const moved = playbackManager.moveQueueTrack(guildId, from, to);
+      if (moved) {
+        await interaction.reply(`↔️ Moved **${moved.name}** from position ${from} to ${to}.`);
+      } else {
+        await interaction.reply({
+          content: 'Could not move track.',
+          ephemeral: true,
+        });
+      }
+      break;
+    }
+
+    case 'loop': {
+      const mode = interaction.options.getString('mode', true) as LoopMode;
+      playbackManager.setLoopMode(guildId, mode);
+
+      const labels: Record<LoopMode, string> = {
+        off: 'Off',
+        track: 'Track (repeat current song)',
+        queue: 'Queue (repeat entire queue)',
+      };
+      await interaction.reply(`🔁 Loop mode set to **${labels[mode]}**`);
+      break;
+    }
+
+    case 'stay': {
+      const mode = interaction.options.getString('mode', true);
+      const stay = mode === 'on';
+      playbackManager.setStayInChannel(guildId, stay);
+      await interaction.reply(`🛡️ Stay-in-channel mode turned **${stay ? 'ON' : 'OFF'}**`);
       break;
     }
 

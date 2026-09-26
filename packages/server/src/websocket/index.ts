@@ -5,6 +5,8 @@ import type {
   PlaybackManager,
   VoicePlatformState,
   QueueUpdatedEvent,
+  PlaybackSettingsUpdatedEvent,
+  VoiceLifecycleUpdatedEvent,
 } from '@gakki/core';
 import { createLogger } from '@gakki/core';
 
@@ -18,6 +20,7 @@ let lastKnownState: VoicePlatformState = {
   track: null,
 };
 const lastKnownQueues = new Map<string, QueueUpdatedEvent>();
+const lastKnownSettings = new Map<string, PlaybackSettingsUpdatedEvent>();
 
 /**
  * Broadcast playback state to all connected WebSocket clients.
@@ -62,6 +65,51 @@ export function broadcastQueueUpdated(event: QueueUpdatedEvent): void {
         client.send(message);
       } catch (err) {
         logger.error({ err }, 'Failed to send queue.updated to WebSocket client');
+      }
+    }
+  }
+}
+
+/**
+ * Broadcast playback settings update event (volume, filters, loopMode, stayInChannel).
+ */
+export function broadcastSettingsUpdated(event: PlaybackSettingsUpdatedEvent): void {
+  lastKnownSettings.set(event.guildId, event);
+  if (!wssInstance) return;
+
+  const message = JSON.stringify({
+    ...event,
+    timestamp: new Date().toISOString(),
+  });
+
+  for (const client of wssInstance.clients) {
+    if (client.readyState === WebSocket.OPEN) {
+      try {
+        client.send(message);
+      } catch (err) {
+        logger.error({ err }, 'Failed to send playback.settings.updated to WebSocket client');
+      }
+    }
+  }
+}
+
+/**
+ * Broadcast voice lifecycle update event (humanCount, timerActive, reason, stayInChannel).
+ */
+export function broadcastVoiceLifecycleUpdated(event: VoiceLifecycleUpdatedEvent): void {
+  if (!wssInstance) return;
+
+  const message = JSON.stringify({
+    ...event,
+    timestamp: new Date().toISOString(),
+  });
+
+  for (const client of wssInstance.clients) {
+    if (client.readyState === WebSocket.OPEN) {
+      try {
+        client.send(message);
+      } catch (err) {
+        logger.error({ err }, 'Failed to send voice.lifecycle.updated to WebSocket client');
       }
     }
   }
@@ -137,9 +185,25 @@ export function createWebSocketServer(
         }),
       );
     }
+
+    // 4. Initial settings state
+    if (activePlaybackManager) {
+      const state = activePlaybackManager.getGuildState('');
+      ws.send(
+        JSON.stringify({
+          type: 'playback.settings.updated',
+          guildId: state.guildId,
+          volume: state.volume,
+          filters: state.filters,
+          loopMode: state.loopMode,
+          stayInChannel: state.stayInChannel,
+          timestamp: new Date().toISOString(),
+        }),
+      );
+    }
   });
 
-  // Listen for playback and queue updates
+  // Listen for playback, queue, settings, and lifecycle updates
   if (activePlaybackManager) {
     activePlaybackManager.onStateChange((state) => {
       broadcastPlaybackState(state);
@@ -147,6 +211,14 @@ export function createWebSocketServer(
 
     activePlaybackManager.onQueueUpdate((event) => {
       broadcastQueueUpdated(event);
+    });
+
+    activePlaybackManager.onPlaybackSettingsUpdate((event) => {
+      broadcastSettingsUpdated(event);
+    });
+
+    activePlaybackManager.onVoiceLifecycleUpdate((event) => {
+      broadcastVoiceLifecycleUpdated(event);
     });
   }
 

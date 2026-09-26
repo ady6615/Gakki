@@ -29,6 +29,24 @@ export interface QueueStatePayload {
   length: number;
 }
 
+export interface SettingsStatePayload {
+  volume: number;
+  filters: {
+    bassboost: boolean;
+    speed: number;
+    nightcore: boolean;
+  };
+  loopMode: 'off' | 'track' | 'queue';
+  stayInChannel: boolean;
+}
+
+export interface LifecycleStatePayload {
+  humanCount: number;
+  timerActive: boolean;
+  reason?: 'empty_channel' | 'queue_empty' | null;
+  stayInChannel: boolean;
+}
+
 const DEFAULT_PLAYBACK: PlaybackStatePayload = {
   guildId: null,
   voiceState: 'DISCONNECTED',
@@ -43,6 +61,24 @@ const DEFAULT_QUEUE: QueueStatePayload = {
   length: 0,
 };
 
+const DEFAULT_SETTINGS: SettingsStatePayload = {
+  volume: 100,
+  filters: {
+    bassboost: false,
+    speed: 1.0,
+    nightcore: false,
+  },
+  loopMode: 'off',
+  stayInChannel: false,
+};
+
+const DEFAULT_LIFECYCLE: LifecycleStatePayload = {
+  humanCount: 0,
+  timerActive: false,
+  reason: null,
+  stayInChannel: false,
+};
+
 function formatDuration(seconds: number | null | undefined): string {
   if (seconds == null || isNaN(seconds)) return '--:--';
   const mins = Math.floor(seconds / 60);
@@ -53,6 +89,8 @@ function formatDuration(seconds: number | null | undefined): string {
 export function PlaybackStatus() {
   const [playback, setPlayback] = useState<PlaybackStatePayload>(DEFAULT_PLAYBACK);
   const [queueState, setQueueState] = useState<QueueStatePayload>(DEFAULT_QUEUE);
+  const [settings, setSettings] = useState<SettingsStatePayload>(DEFAULT_SETTINGS);
+  const [lifecycle, setLifecycle] = useState<LifecycleStatePayload>(DEFAULT_LIFECYCLE);
   const [wsConnected, setWsConnected] = useState<boolean>(false);
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -66,12 +104,12 @@ export function PlaybackStatus() {
           if (data.primary) {
             setPlayback(data.primary);
             if (data.primary.guildId) {
-              fetchQueue(data.primary.guildId);
+              fetchGuildData(data.primary.guildId);
             }
           } else if (data.voiceState) {
             setPlayback(data);
             if (data.guildId) {
-              fetchQueue(data.guildId);
+              fetchGuildData(data.guildId);
             }
           }
         }
@@ -80,12 +118,31 @@ export function PlaybackStatus() {
       }
     };
 
-    const fetchQueue = async (guildId: string) => {
+    const fetchGuildData = async (guildId: string) => {
       try {
-        const res = await fetch(`/api/queue/${guildId}`);
-        if (res.ok) {
-          const data: QueueStatePayload = await res.json();
-          setQueueState(data);
+        const queueRes = await fetch(`/api/queue/${guildId}`);
+        if (queueRes.ok) {
+          const qData: QueueStatePayload = await queueRes.json();
+          setQueueState(qData);
+        }
+
+        const stateRes = await fetch(`/api/playback/${guildId}/state`);
+        if (stateRes.ok) {
+          const sData = await stateRes.json();
+          if (sData.state) {
+            setSettings({
+              volume: sData.state.volume ?? 100,
+              filters: sData.state.filters ?? DEFAULT_SETTINGS.filters,
+              loopMode: sData.state.loopMode ?? 'off',
+              stayInChannel: sData.state.stayInChannel ?? false,
+            });
+            setLifecycle({
+              humanCount: sData.state.humanCount ?? 0,
+              timerActive: sData.state.voiceIdleTimerActive ?? false,
+              reason: sData.state.voiceIdleReason ?? null,
+              stayInChannel: sData.state.stayInChannel ?? false,
+            });
+          }
         }
       } catch {
         // Ignore
@@ -112,7 +169,7 @@ export function PlaybackStatus() {
           if (msg.type === 'playback_state' && msg.payload) {
             setPlayback(msg.payload);
             if (msg.payload.guildId) {
-              fetchQueue(msg.payload.guildId);
+              fetchGuildData(msg.payload.guildId);
             }
           } else if (msg.type === 'queue.updated') {
             setQueueState({
@@ -120,6 +177,20 @@ export function PlaybackStatus() {
               currentTrack: msg.currentTrack,
               queue: msg.queue || [],
               length: msg.length ?? (msg.queue ? msg.queue.length : 0),
+            });
+          } else if (msg.type === 'playback.settings.updated') {
+            setSettings({
+              volume: msg.volume ?? 100,
+              filters: msg.filters ?? DEFAULT_SETTINGS.filters,
+              loopMode: msg.loopMode ?? 'off',
+              stayInChannel: msg.stayInChannel ?? false,
+            });
+          } else if (msg.type === 'voice.lifecycle.updated') {
+            setLifecycle({
+              humanCount: msg.humanCount ?? 0,
+              timerActive: msg.timerActive ?? false,
+              reason: msg.reason ?? null,
+              stayInChannel: msg.stayInChannel ?? false,
             });
           }
         } catch {
@@ -182,6 +253,59 @@ export function PlaybackStatus() {
             {playback.playerState}
           </span>
         </div>
+      </div>
+
+      {/* Audio Controls & DSP Effects Bar */}
+      <div className="effects-bar">
+        <div className="effect-chip volume-chip" title="Active Volume">
+          <span className="chip-icon">🔊</span>
+          <span className="chip-text">{settings.volume}%</span>
+        </div>
+
+        <div
+          className={`effect-chip ${settings.filters.bassboost ? 'active' : ''}`}
+          title="Bassboost filter"
+        >
+          <span className="chip-icon">🎚️</span>
+          <span className="chip-text">
+            Bass: {settings.filters.bassboost ? 'ON' : 'OFF'}
+          </span>
+        </div>
+
+        <div
+          className={`effect-chip ${settings.filters.speed !== 1.0 ? 'active' : ''}`}
+          title="Playback speed"
+        >
+          <span className="chip-icon">⏩</span>
+          <span className="chip-text">{settings.filters.speed}x</span>
+        </div>
+
+        <div
+          className={`effect-chip ${settings.filters.nightcore ? 'active' : ''}`}
+          title="Nightcore effect"
+        >
+          <span className="chip-icon">✨</span>
+          <span className="chip-text">
+            Nightcore: {settings.filters.nightcore ? 'ON' : 'OFF'}
+          </span>
+        </div>
+
+        <div
+          className={`effect-chip ${settings.loopMode !== 'off' ? 'active' : ''}`}
+          title="Loop mode"
+        >
+          <span className="chip-icon">🔁</span>
+          <span className="chip-text">Loop: {settings.loopMode.toUpperCase()}</span>
+        </div>
+
+        {lifecycle.timerActive && (
+          <div className="effect-chip timer-chip" title="Inactivity auto-leave timer">
+            <span className="chip-icon">⏱️</span>
+            <span className="chip-text">
+              Auto-Leave ({lifecycle.reason === 'empty_channel' ? 'empty' : 'idle'})
+            </span>
+          </div>
+        )}
       </div>
 
       <div className="track-section">

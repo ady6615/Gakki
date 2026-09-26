@@ -13,18 +13,22 @@ import { createWebSocketServer } from './websocket';
 const logger = createLogger('main');
 
 async function main(): Promise<void> {
-  logger.info('Starting Gakki Music Platform — Phase 3 (Queue Management & Auto-Advance)...');
+  logger.info('Starting Gakki Music Platform — Phase 4 (Voice Lifecycle, Audio Effects & Queue Manipulation)...');
 
   // ── Configuration ──────────────────────────────────────────────
   const config = loadConfig();
-  logger.info({ env: config.NODE_ENV, port: config.API_PORT }, 'Configuration loaded');
+  logger.info({ env: config.NODE_ENV, port: config.API_PORT, voiceTimeout: config.VOICE_IDLE_TIMEOUT_SECONDS }, 'Configuration loaded');
 
   // ── Queue & Playback Engines ────────────────────────────────────
   const queueLogger = createLogger('queue-manager');
   const queueManager = new QueueManager(queueLogger);
 
   const playbackLogger = createLogger('playback-manager');
-  const playbackManager = new PlaybackManager(playbackLogger, queueManager);
+  const playbackManager = new PlaybackManager(
+    playbackLogger,
+    queueManager,
+    config.VOICE_IDLE_TIMEOUT_SECONDS,
+  );
 
   // ── Database ───────────────────────────────────────────────────
   let dbConnected = false;
@@ -64,7 +68,7 @@ async function main(): Promise<void> {
       api: `http://localhost:${config.API_PORT}`,
       ws: `ws://localhost:${config.API_PORT}/ws`,
     },
-    'Gakki Phase 3 startup complete',
+    'Gakki Phase 4 startup complete',
   );
 
   // ── Graceful Shutdown ─────────────────────────────────────────

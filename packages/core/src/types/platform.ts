@@ -10,6 +10,14 @@
 
 import type { AudioSource } from '../audio/audio-source';
 import type { AudioTrackInfo, PlaybackStatus, VoiceConnectionStatus, VoicePlatformState } from './audio';
+import type { AudioFilterConfig } from './queue';
+
+/** Play options passed to adapter.play() */
+export interface AdapterPlayOptions {
+  volume?: number;
+  filters?: AudioFilterConfig;
+  seekSeconds?: number;
+}
 
 /** Connection state for a platform adapter */
 export type PlatformConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';
@@ -55,10 +63,15 @@ export interface VoicePlatformAdapter {
   leaveVoice(guildId: string): Promise<void>;
   getVoiceStatus(guildId: string): VoiceConnectionStatus;
 
-  play(guildId: string, source: AudioSource): Promise<void>;
+  play(guildId: string, source: AudioSource, options?: AdapterPlayOptions): Promise<void>;
   pause(guildId: string): boolean;
   resume(guildId: string): boolean;
   stop(guildId: string): boolean;
+
+  setVolume?(guildId: string, volume: number): void;
+  rebuildCurrentStream?(guildId: string, filters: AudioFilterConfig, seekSeconds?: number): Promise<void>;
+  getPlaybackDuration?(guildId: string): number;
+  getHumanCount?(guildId: string): number;
 
   getPlaybackStatus(guildId: string): PlaybackStatus;
   getCurrentTrack(guildId: string): AudioTrackInfo | null;

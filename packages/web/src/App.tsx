@@ -18,7 +18,7 @@ function App() {
       </main>
 
       <footer className="app-footer">
-        <p>Gakki v0.3.0 — Phase 3 Queue Management</p>
+        <p>Gakki v0.4.0 — Phase 4 Voice Lifecycle & Audio Effects</p>
       </footer>
     </div>
   );

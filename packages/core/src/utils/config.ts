@@ -50,6 +50,9 @@ const configSchema = z.object({
   // API Server
   API_PORT: z.coerce.number().int().positive().default(3000),
 
+  // Voice Lifecycle
+  VOICE_IDLE_TIMEOUT_SECONDS: z.coerce.number().int().nonnegative().default(300),
+
   // Logging
   LOG_LEVEL: z
     .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace'])

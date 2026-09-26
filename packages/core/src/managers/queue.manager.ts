@@ -233,6 +233,80 @@ export class QueueManager {
   }
 
   /**
+   * Perform an in-place Fisher-Yates shuffle of the queued tracks for the guild.
+   * Does NOT touch the currently playing track.
+   * Returns true if shuffled, false if queue has 0 or 1 tracks.
+   */
+  shuffle(guildId: string): boolean {
+    const queue = this.queues.get(guildId);
+    if (!queue || queue.tracks.length <= 1) {
+      return false;
+    }
+
+    // In-place Fisher-Yates shuffle
+    for (let i = queue.tracks.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [queue.tracks[i], queue.tracks[j]] = [queue.tracks[j], queue.tracks[i]];
+    }
+
+    this.logger.info(
+      { guildId, trackCount: queue.tracks.length },
+      '[QUEUE] Shuffled',
+    );
+    this.notifyChange(guildId);
+    return true;
+  }
+
+  /**
+   * Move a track from one position in the queue to another.
+   *
+   * @param fromIndex - Source position (1-based by default)
+   * @param toIndex - Destination position (1-based by default)
+   * @param isOneBased - Whether indexes are 1-based (default true)
+   */
+  moveTrack(
+    guildId: string,
+    fromIndex: number,
+    toIndex: number,
+    isOneBased: boolean = true,
+  ): QueueTrack | null {
+    const queue = this.queues.get(guildId);
+    if (!queue) return null;
+
+    const from = isOneBased ? fromIndex - 1 : fromIndex;
+    const to = isOneBased ? toIndex - 1 : toIndex;
+
+    if (
+      from < 0 ||
+      from >= queue.tracks.length ||
+      to < 0 ||
+      to >= queue.tracks.length ||
+      from === to
+    ) {
+      return null;
+    }
+
+    const [track] = queue.tracks.splice(from, 1);
+    queue.tracks.splice(to, 0, track);
+
+    this.logger.info(
+      {
+        guildId,
+        trackId: track.id,
+        name: track.name,
+        from: fromIndex,
+        to: toIndex,
+      },
+      '[QUEUE] Track moved: %s from %d to %d',
+      track.name,
+      fromIndex,
+      toIndex,
+    );
+    this.notifyChange(guildId);
+    return track;
+  }
+
+  /**
    * Delete queue on bot leave or cleanup.
    */
   deleteQueue(guildId: string): void {

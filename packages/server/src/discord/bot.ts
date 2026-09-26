@@ -94,6 +94,25 @@ export async function createDiscordBot(
     }
   });
 
+  client.on('voiceStateUpdate', (oldState, newState) => {
+    if (!activeManager) return;
+    const guildId = newState.guild?.id || oldState.guild?.id;
+    if (!guildId) return;
+
+    // Check if bot is currently connected to a voice channel in this guild
+    const botChannelId = newState.guild?.members.me?.voice.channelId;
+    if (!botChannelId) return;
+
+    // If someone joined or left the bot's voice channel, update human count
+    if (oldState.channelId === botChannelId || newState.channelId === botChannelId) {
+      const channel = newState.guild.channels.cache.get(botChannelId);
+      if (channel && channel.isVoiceBased()) {
+        const humanCount = channel.members.filter((m) => !m.user.bot).size;
+        activeManager.voiceLifecycleManager.handleHumanCountChange(guildId, humanCount);
+      }
+    }
+  });
+
   client.on('error', (error) => {
     logger.error({ err: error }, 'Discord client error');
   });

@@ -11,7 +11,9 @@ import {
   StreamType,
   type VoiceConnection,
   type AudioPlayer,
+  type AudioResource,
 } from '@discordjs/voice';
+import type { ChildProcess } from 'node:child_process';
 import type {
   VoicePlatformAdapter,
   AudioSource,
@@ -19,6 +21,8 @@ import type {
   VoiceConnectionStatus as CoreVoiceStatus,
   PlaybackStatus,
   AudioTrackInfo,
+  AudioFilterConfig,
+  AdapterPlayOptions,
 } from '@gakki/core';
 import {
   createLogger,
@@ -26,6 +30,7 @@ import {
   LocalAudioSource,
 } from '@gakki/core';
 import '../audio/ffmpeg'; // Ensure FFMPEG_PATH is configured
+import { createFilteredFfmpegProcess, clampVolume } from '../audio/audio-filters';
 
 const logger = createLogger('discord-voice');
 
@@ -47,6 +52,11 @@ export class DiscordVoiceAdapter implements VoicePlatformAdapter {
   private readonly currentTracks = new Map<string, AudioTrackInfo | null>();
   private readonly voiceStates = new Map<string, CoreVoiceStatus>();
   private readonly playerStates = new Map<string, PlaybackStatus>();
+  private readonly activeProcesses = new Map<string, ChildProcess>();
+  private readonly activeResources = new Map<string, AudioResource>();
+  private readonly channelIds = new Map<string, string>();
+  private readonly guildVolumes = new Map<string, number>();
+  private readonly guildFilters = new Map<string, AudioFilterConfig>();
 
   private readonly stateListeners = new Set<StateChangeListener>();
   private readonly errorListeners = new Set<ErrorListener>();
@@ -110,6 +120,7 @@ export class DiscordVoiceAdapter implements VoicePlatformAdapter {
     });
 
     this.connections.set(guildId, connection);
+    this.channelIds.set(guildId, channelId);
 
     // Setup connection listeners
     connection.on(VoiceConnectionStatus.Ready, () => {
@@ -183,9 +194,13 @@ export class DiscordVoiceAdapter implements VoicePlatformAdapter {
   }
 
   /**
-   * Play an AudioSource on the guild's audio player.
+   * Play an AudioSource on the guild's audio player with optional filters, volume, and seek offset.
    */
-  async play(guildId: string, source: AudioSource): Promise<void> {
+  async play(
+    guildId: string,
+    source: AudioSource,
+    options?: AdapterPlayOptions,
+  ): Promise<void> {
     const connection = this.connections.get(guildId);
     if (!connection || connection.state.status === VoiceConnectionStatus.Destroyed) {
       throw new Error('Not connected to a voice channel. Use /join first or specify a channel.');
@@ -200,12 +215,41 @@ export class DiscordVoiceAdapter implements VoicePlatformAdapter {
 
     const player = this.getOrCreatePlayer(guildId);
 
-    // Create audio resource using FFmpeg
-    let resource;
+    // Clean up any previously active FFmpeg process for this guild
+    const prevProc = this.activeProcesses.get(guildId);
+    if (prevProc && !prevProc.killed) {
+      prevProc.kill('SIGTERM');
+      this.activeProcesses.delete(guildId);
+    }
+
+    if (options?.volume !== undefined) {
+      this.guildVolumes.set(guildId, clampVolume(options.volume));
+    }
+    if (options?.filters) {
+      this.guildFilters.set(guildId, options.filters);
+    }
+
+    // Create audio resource using FFmpeg filter pipeline for local files
+    let resource: AudioResource;
     if (source instanceof LocalAudioSource) {
-      resource = createAudioResource(source.resolvedPath, {
-        inputType: StreamType.Arbitrary,
+      const activeFilters = options?.filters ?? this.guildFilters.get(guildId);
+      const proc = createFilteredFfmpegProcess(source.resolvedPath, {
+        filters: activeFilters,
+        seekSeconds: options?.seekSeconds,
+      });
+      if (!proc.stdout) {
+        throw new Error('FFmpeg stdout stream is unavailable');
+      }
+
+      resource = createAudioResource(proc.stdout, {
+        inputType: StreamType.Raw,
         inlineVolume: true,
+      });
+
+      proc.on('exit', () => {
+        if (this.activeProcesses.get(guildId) === proc) {
+          this.activeProcesses.delete(guildId);
+        }
       });
     } else {
       const stream = await source.getStream();
@@ -214,6 +258,14 @@ export class DiscordVoiceAdapter implements VoicePlatformAdapter {
         inlineVolume: true,
       });
     }
+
+    // Apply configured volume (0.0 to 2.0 linear gain)
+    const currentVolume = options?.volume ?? this.guildVolumes.get(guildId) ?? 100;
+    if (resource.volume) {
+      resource.volume.setVolume(currentVolume / 100);
+    }
+
+    this.activeResources.set(guildId, resource);
 
     resource.playStream.on('error', (streamErr) => {
       logger.error({ err: streamErr, guildId }, '[ERROR] Audio stream error');
@@ -233,6 +285,118 @@ export class DiscordVoiceAdapter implements VoicePlatformAdapter {
 
     logger.info({ guildId, title: metadata.title }, '[AUDIO] Starting playback: %s', metadata.title);
     player.play(resource);
+  }
+
+  /**
+   * Adjust playback volume immediately on the active stream without interruption.
+   *
+   * @param guildId - Guild identifier
+   * @param volume - Level from 0 to 200
+   */
+  setVolume(guildId: string, volume: number): void {
+    const clamped = clampVolume(volume);
+    this.guildVolumes.set(guildId, clamped);
+
+    const resource = this.activeResources.get(guildId);
+    if (resource?.volume) {
+      resource.volume.setVolume(clamped / 100);
+    }
+  }
+
+  /**
+   * Rebuild the audio processing pipeline with new audio filters while playing,
+   * resuming at the elapsed playback position as closely as practical.
+   *
+   * @param guildId - Guild identifier
+   * @param filters - New filter configuration
+   * @param seekSeconds - Optional explicit seek position in seconds
+   */
+  async rebuildCurrentStream(
+    guildId: string,
+    filters: AudioFilterConfig,
+    seekSeconds?: number,
+  ): Promise<void> {
+    const currentTrack = this.currentTracks.get(guildId);
+    if (!currentTrack || !currentTrack.filePath) {
+      return;
+    }
+
+    const player = this.players.get(guildId);
+    if (!player) return;
+
+    const oldResource = this.activeResources.get(guildId);
+    const elapsed =
+      seekSeconds !== undefined
+        ? seekSeconds
+        : Math.floor((oldResource?.playbackDuration || 0) / 1000);
+
+    // Terminate old FFmpeg process
+    const prevProc = this.activeProcesses.get(guildId);
+    if (prevProc && !prevProc.killed) {
+      prevProc.kill('SIGTERM');
+      this.activeProcesses.delete(guildId);
+    }
+
+    this.guildFilters.set(guildId, filters);
+
+    // Spawn new FFmpeg process seeking to current elapsed playback time
+    const proc = createFilteredFfmpegProcess(currentTrack.filePath, {
+      filters,
+      seekSeconds: elapsed,
+    });
+    this.activeProcesses.set(guildId, proc);
+
+    if (!proc.stdout) {
+      throw new Error('FFmpeg stdout stream is unavailable');
+    }
+
+    const newResource = createAudioResource(proc.stdout, {
+      inputType: StreamType.Raw,
+      inlineVolume: true,
+    });
+
+    const currentVolume = this.guildVolumes.get(guildId) ?? 100;
+    if (newResource.volume) {
+      newResource.volume.setVolume(currentVolume / 100);
+    }
+
+    this.activeResources.set(guildId, newResource);
+
+    newResource.playStream.on('error', (streamErr) => {
+      logger.error({ err: streamErr, guildId }, '[ERROR] Rebuilt stream error');
+      this.setPlayerState(guildId, 'ERROR');
+      this.emitError(guildId, streamErr);
+    });
+
+    logger.info(
+      { guildId, track: currentTrack.name, elapsed, filters },
+      '[AUDIO] FFmpeg pipeline rebuilt',
+    );
+    player.play(newResource);
+  }
+
+  /**
+   * Get elapsed playback duration in milliseconds for the current track.
+   */
+  getPlaybackDuration(guildId: string): number {
+    const resource = this.activeResources.get(guildId);
+    return resource?.playbackDuration || 0;
+  }
+
+  /**
+   * Get the number of non-bot human members in the bot's current voice channel.
+   */
+  getHumanCount(guildId: string): number {
+    const channelId = this.channelIds.get(guildId);
+    if (!channelId) return 0;
+
+    const guild = this.client.guilds.cache.get(guildId);
+    if (!guild) return 0;
+
+    const channel = guild.channels.cache.get(channelId);
+    if (!channel || !channel.isVoiceBased()) return 0;
+
+    return channel.members.filter((m) => !m.user.bot).size;
   }
 
   pause(guildId: string): boolean {
@@ -260,6 +424,13 @@ export class DiscordVoiceAdapter implements VoicePlatformAdapter {
   }
 
   stop(guildId: string): boolean {
+    const proc = this.activeProcesses.get(guildId);
+    if (proc && !proc.killed) {
+      proc.kill('SIGTERM');
+      this.activeProcesses.delete(guildId);
+    }
+    this.activeResources.delete(guildId);
+
     const player = this.players.get(guildId);
     if (!player) return false;
 
@@ -342,6 +513,13 @@ export class DiscordVoiceAdapter implements VoicePlatformAdapter {
   }
 
   private cleanupGuild(guildId: string): void {
+    const proc = this.activeProcesses.get(guildId);
+    if (proc && !proc.killed) {
+      proc.kill('SIGTERM');
+      this.activeProcesses.delete(guildId);
+    }
+    this.activeResources.delete(guildId);
+    this.channelIds.delete(guildId);
     this.connections.delete(guildId);
     const player = this.players.get(guildId);
     if (player) {
