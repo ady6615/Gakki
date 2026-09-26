@@ -37,4 +37,6 @@ export { AiRecommendationManager } from './managers/ai-recommendation.manager';
 export { LyricsManager } from './managers/lyrics.manager';
 export { RecordingManager } from './managers/recording.manager';
 export { VoiceLifecycleManager } from './managers/voice-lifecycle.manager';
+export { GuildSettingsManager } from './managers/guild-settings.manager';
+
 

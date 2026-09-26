@@ -7,10 +7,16 @@ import type { Track } from './track';
 export interface QueueTrack {
   id: string;
   name: string;
-  path: string; // sanitized relative path e.g. "test.mp3" or "my-playlist/01.mp3"
+  path: string; // sanitized relative path e.g. "test.mp3" or stream URL
   duration?: number;
   addedBy?: string;
   artist?: string | null;
+  album?: string | null;
+  thumbnailUrl?: string | null;
+  sourceProvider?: string;
+  sourceUrl?: string;
+  source?: string | null;
+  artwork?: string | null;
 }
 
 /**
@@ -28,8 +34,14 @@ export interface QueueDisplayItem {
   position: number;
   id: string;
   name: string;
+  artist?: string | null;
+  album?: string | null;
+  thumbnailUrl?: string | null;
+  sourceProvider?: string | null;
   duration?: number;
   addedBy?: string;
+  source?: string | null;
+  artwork?: string | null;
 }
 
 /**
@@ -45,7 +57,13 @@ export interface QueueUpdatedEvent {
   currentTrack: {
     id?: string;
     name: string;
+    artist?: string | null;
+    album?: string | null;
+    thumbnailUrl?: string | null;
+    sourceProvider?: string | null;
     duration?: number | null;
+    source?: string | null;
+    artwork?: string | null;
   } | null;
   queue: QueueDisplayItem[];
   length: number;
@@ -95,6 +113,24 @@ export interface GuildPlaybackState {
   voiceIdleTimerActive: boolean;
   voiceIdleReason?: 'empty_channel' | 'queue_empty' | null;
   timeoutSeconds?: number;
+}
+
+export interface GuildSettings {
+  guildId: string;
+  volume: number;
+  filters: AudioFilterConfig;
+  loopMode: LoopMode;
+  stayInChannel: boolean;
+  voiceIdleTimeout: number;
+}
+
+/**
+ * Guild settings update event broadcast to WebSocket clients.
+ */
+export interface GuildSettingsUpdatedEvent {
+  type: 'guild.settings.updated';
+  guildId: string;
+  settings: GuildSettings;
 }
 
 /**

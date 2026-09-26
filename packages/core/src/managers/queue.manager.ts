@@ -70,6 +70,12 @@ export class QueueManager {
       duration: trackInput.duration,
       addedBy: trackInput.addedBy,
       artist: trackInput.artist,
+      album: trackInput.album,
+      thumbnailUrl: trackInput.thumbnailUrl,
+      sourceProvider: trackInput.sourceProvider,
+      sourceUrl: trackInput.sourceUrl,
+      source: trackInput.source,
+      artwork: trackInput.artwork,
     };
 
     queue.tracks.push(track);
@@ -100,6 +106,12 @@ export class QueueManager {
         duration: input.duration,
         addedBy: input.addedBy,
         artist: input.artist,
+        album: input.album,
+        thumbnailUrl: input.thumbnailUrl,
+        sourceProvider: input.sourceProvider,
+        sourceUrl: input.sourceUrl,
+        source: input.source,
+        artwork: input.artwork,
       };
       queue.tracks.push(track);
       added.push(track);
@@ -213,6 +225,12 @@ export class QueueManager {
       name: track.name,
       duration: track.duration,
       addedBy: track.addedBy,
+      artist: track.artist,
+      album: track.album,
+      thumbnailUrl: track.thumbnailUrl,
+      sourceProvider: track.sourceProvider,
+      source: track.source,
+      artwork: track.artwork,
     }));
   }
 

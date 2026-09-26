@@ -28,9 +28,11 @@ import {
   createLogger,
   VoicePermissionError,
   LocalAudioSource,
+  HttpAudioSource,
 } from '@gakki/core';
 import '../audio/ffmpeg'; // Ensure FFMPEG_PATH is configured
 import { createFilteredFfmpegProcess, clampVolume } from '../audio/audio-filters';
+import { RemoteStreamManager, globalRemoteStreamManager } from '../audio/remote-stream';
 
 const logger = createLogger('discord-voice');
 
@@ -57,12 +59,19 @@ export class DiscordVoiceAdapter implements VoicePlatformAdapter {
   private readonly channelIds = new Map<string, string>();
   private readonly guildVolumes = new Map<string, number>();
   private readonly guildFilters = new Map<string, AudioFilterConfig>();
+  private readonly activeCacheKeys = new Map<string, string>();
+  private readonly remoteStreamManager: RemoteStreamManager;
 
   private readonly stateListeners = new Set<StateChangeListener>();
   private readonly errorListeners = new Set<ErrorListener>();
   private readonly trackEndListeners = new Set<(guildId: string) => void>();
 
-  constructor(private readonly client: Client) {}
+  constructor(
+    private readonly client: Client,
+    remoteStreamManager: RemoteStreamManager = globalRemoteStreamManager,
+  ) {
+    this.remoteStreamManager = remoteStreamManager;
+  }
 
 
   /**
@@ -229,35 +238,44 @@ export class DiscordVoiceAdapter implements VoicePlatformAdapter {
       this.guildFilters.set(guildId, options.filters);
     }
 
-    // Create audio resource using FFmpeg filter pipeline for local files
-    let resource: AudioResource;
+    // Determine input path: local file, buffered remote stream, or identifier
+    let audioPath: string;
     if (source instanceof LocalAudioSource) {
-      const activeFilters = options?.filters ?? this.guildFilters.get(guildId);
-      const proc = createFilteredFfmpegProcess(source.resolvedPath, {
-        filters: activeFilters,
-        seekSeconds: options?.seekSeconds,
+      audioPath = source.resolvedPath;
+    } else if (source instanceof HttpAudioSource) {
+      const prepared = await this.remoteStreamManager.prepareStream(guildId, source.url, {
+        persistent: false,
       });
-      if (!proc.stdout) {
-        throw new Error('FFmpeg stdout stream is unavailable');
+      audioPath = prepared.filePathOrUrl;
+      if (prepared.cacheKey) {
+        this.activeCacheKeys.set(guildId, prepared.cacheKey);
       }
-
-      resource = createAudioResource(proc.stdout, {
-        inputType: StreamType.Raw,
-        inlineVolume: true,
-      });
-
-      proc.on('exit', () => {
-        if (this.activeProcesses.get(guildId) === proc) {
-          this.activeProcesses.delete(guildId);
-        }
-      });
     } else {
-      const stream = await source.getStream();
-      resource = createAudioResource(stream, {
-        inputType: StreamType.Arbitrary,
-        inlineVolume: true,
-      });
+      audioPath = source.identifier;
     }
+
+    // Create audio resource using FFmpeg filter pipeline (supports local files and buffered streams)
+    const activeFilters = options?.filters ?? this.guildFilters.get(guildId);
+    const proc = createFilteredFfmpegProcess(audioPath, {
+      filters: activeFilters,
+      seekSeconds: options?.seekSeconds,
+    });
+    this.activeProcesses.set(guildId, proc);
+
+    if (!proc.stdout) {
+      throw new Error('FFmpeg stdout stream is unavailable');
+    }
+
+    const resource = createAudioResource(proc.stdout, {
+      inputType: StreamType.Raw,
+      inlineVolume: true,
+    });
+
+    proc.on('exit', () => {
+      if (this.activeProcesses.get(guildId) === proc) {
+        this.activeProcesses.delete(guildId);
+      }
+    });
 
     // Apply configured volume (0.0 to 2.0 linear gain)
     const currentVolume = options?.volume ?? this.guildVolumes.get(guildId) ?? 100;
@@ -277,7 +295,7 @@ export class DiscordVoiceAdapter implements VoicePlatformAdapter {
       name: metadata.title,
       duration: metadata.duration ?? null,
       artist: metadata.artist ?? null,
-      filePath: source instanceof LocalAudioSource ? source.resolvedPath : source.identifier,
+      filePath: audioPath,
       sourceType: source.sourceType,
     };
 
@@ -527,6 +545,14 @@ export class DiscordVoiceAdapter implements VoicePlatformAdapter {
       this.players.delete(guildId);
     }
     this.currentTracks.delete(guildId);
+
+    // Abort pending remote stream and clean up ephemeral cache file
+    this.remoteStreamManager.abortGuildStream(guildId);
+    const cacheKey = this.activeCacheKeys.get(guildId);
+    if (cacheKey) {
+      this.remoteStreamManager.cleanupStream(cacheKey);
+      this.activeCacheKeys.delete(guildId);
+    }
   }
 
   private setVoiceState(guildId: string, state: CoreVoiceStatus): void {

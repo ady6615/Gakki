@@ -71,10 +71,12 @@ export function broadcastQueueUpdated(event: QueueUpdatedEvent): void {
 }
 
 /**
- * Broadcast playback settings update event (volume, filters, loopMode, stayInChannel).
+ * Broadcast playback or guild settings update event.
  */
-export function broadcastSettingsUpdated(event: PlaybackSettingsUpdatedEvent): void {
-  lastKnownSettings.set(event.guildId, event);
+export function broadcastSettingsUpdated(event: PlaybackSettingsUpdatedEvent | any): void {
+  if (event.guildId) {
+    lastKnownSettings.set(event.guildId, event);
+  }
   if (!wssInstance) return;
 
   const message = JSON.stringify({
@@ -87,7 +89,29 @@ export function broadcastSettingsUpdated(event: PlaybackSettingsUpdatedEvent): v
       try {
         client.send(message);
       } catch (err) {
-        logger.error({ err }, 'Failed to send playback.settings.updated to WebSocket client');
+        logger.error({ err }, 'Failed to send settings updated to WebSocket client');
+      }
+    }
+  }
+}
+
+/**
+ * Broadcast arbitrary domain event to all connected WebSocket clients.
+ */
+export function broadcastEvent(event: { type: string; [key: string]: any }): void {
+  if (!wssInstance) return;
+
+  const message = JSON.stringify({
+    ...event,
+    timestamp: new Date().toISOString(),
+  });
+
+  for (const client of wssInstance.clients) {
+    if (client.readyState === WebSocket.OPEN) {
+      try {
+        client.send(message);
+      } catch (err) {
+        logger.error({ err, type: event.type }, 'Failed to send event to WebSocket client');
       }
     }
   }

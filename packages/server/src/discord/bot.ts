@@ -1,5 +1,5 @@
 import { Client, GatewayIntentBits } from 'discord.js';
-import type { AudioPlayerManager, PlaybackManager } from '@gakki/core';
+import type { AudioPlayerManager, PlaybackManager, AudioSourceManager } from '@gakki/core';
 import { createLogger } from '@gakki/core';
 import {
   slashCommandDefinitions,
@@ -20,11 +20,13 @@ let client: Client | null = null;
  *
  * @param token - Discord bot token
  * @param playbackManager - Optional PlaybackManager or AudioPlayerManager for handling voice commands
+ * @param audioSourceManager - Optional AudioSourceManager for resolving internet and local sources
  * @returns The connected Discord.js Client
  */
 export async function createDiscordBot(
   token: string,
   playbackManager?: PlaybackManager | AudioPlayerManager,
+  audioSourceManager?: AudioSourceManager,
 ): Promise<Client> {
   client = new Client({
     intents: [
@@ -79,7 +81,7 @@ export async function createDiscordBot(
       if (interaction.isAutocomplete()) {
         await handleAutocomplete(interaction);
       } else if (interaction.isChatInputCommand()) {
-        await handleChatInputCommand(interaction, activeManager);
+        await handleChatInputCommand(interaction, activeManager, audioSourceManager);
       }
     } catch (err) {
       logger.error({ err }, '[ERROR] Unhandled error during interaction');

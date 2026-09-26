@@ -1,10 +1,11 @@
 import express from 'express';
 import http from 'node:http';
 import cors from 'cors';
-import type { AudioPlayerManager, PlaybackManager } from '@gakki/core';
+import type { AudioPlayerManager, PlaybackManager, AudioSourceManager } from '@gakki/core';
 import { createLogger } from '@gakki/core';
 import { createRoutes } from './routes';
 import { errorHandler } from './middleware/error-handler';
+import { ArtworkService } from '../services/artwork.service';
 
 const logger = createLogger('api');
 
@@ -17,6 +18,8 @@ const logger = createLogger('api');
 export function createApiServer(
   port: number,
   manager?: PlaybackManager | AudioPlayerManager,
+  audioSourceManager?: AudioSourceManager,
+  artworkService?: ArtworkService,
 ): { app: express.Application; server: http.Server } {
   const app = express();
 
@@ -25,7 +28,7 @@ export function createApiServer(
   app.use(express.json());
 
   // Routes
-  app.use('/api', createRoutes(manager));
+  app.use('/api', createRoutes(manager, audioSourceManager, artworkService));
 
 
   // Error handling (must be registered last)

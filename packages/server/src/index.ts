@@ -3,12 +3,17 @@ import {
   createLogger,
   connectDatabase,
   disconnectDatabase,
+  type DatabaseClient,
   QueueManager,
   PlaybackManager,
+  GuildSettingsManager,
+  TrackManager,
 } from '@gakki/core';
 import { createApiServer } from './api/server';
 import { createDiscordBot, DiscordVoiceAdapter } from './discord';
 import { createWebSocketServer } from './websocket';
+import { ArtworkService } from './services/artwork.service';
+import { createConfiguredAudioSourceManager } from './sources';
 
 const logger = createLogger('main');
 
@@ -19,6 +24,24 @@ async function main(): Promise<void> {
   const config = loadConfig();
   logger.info({ env: config.NODE_ENV, port: config.API_PORT, voiceTimeout: config.VOICE_IDLE_TIMEOUT_SECONDS }, 'Configuration loaded');
 
+  // ── Database ───────────────────────────────────────────────────
+  let dbClient: DatabaseClient | null = null;
+  let dbConnected = false;
+  try {
+    dbClient = await connectDatabase(config.DATABASE_URL);
+    dbConnected = true;
+  } catch (error) {
+    logger.error({ err: error }, 'Failed to connect to database — continuing without database');
+  }
+
+  // ── Persistent Metadata & Source Services ───────────────────────
+  const guildSettingsManager = new GuildSettingsManager(dbClient, {
+    defaultIdleTimeoutSeconds: config.VOICE_IDLE_TIMEOUT_SECONDS,
+  });
+  const trackManager = new TrackManager(dbClient);
+  const artworkService = new ArtworkService();
+  const audioSourceManager = createConfiguredAudioSourceManager(artworkService, trackManager);
+
   // ── Queue & Playback Engines ────────────────────────────────────
   const queueLogger = createLogger('queue-manager');
   const queueManager = new QueueManager(queueLogger);
@@ -28,19 +51,11 @@ async function main(): Promise<void> {
     playbackLogger,
     queueManager,
     config.VOICE_IDLE_TIMEOUT_SECONDS,
+    guildSettingsManager,
   );
 
-  // ── Database ───────────────────────────────────────────────────
-  let dbConnected = false;
-  try {
-    await connectDatabase(config.DATABASE_URL);
-    dbConnected = true;
-  } catch (error) {
-    logger.error({ err: error }, 'Failed to connect to database — continuing without database');
-  }
-
   // ── API Server ─────────────────────────────────────────────────
-  const { server } = createApiServer(config.API_PORT, playbackManager);
+  const { server } = createApiServer(config.API_PORT, playbackManager, audioSourceManager, artworkService);
 
   // ── WebSocket ──────────────────────────────────────────────────
   createWebSocketServer(server, playbackManager);
@@ -49,7 +64,7 @@ async function main(): Promise<void> {
   let discordConnected = false;
   if (config.DISCORD_TOKEN) {
     try {
-      const client = await createDiscordBot(config.DISCORD_TOKEN, playbackManager);
+      const client = await createDiscordBot(config.DISCORD_TOKEN, playbackManager, audioSourceManager);
       const voiceAdapter = new DiscordVoiceAdapter(client);
       playbackManager.registerAdapter(voiceAdapter);
       discordConnected = true;
@@ -68,7 +83,7 @@ async function main(): Promise<void> {
       api: `http://localhost:${config.API_PORT}`,
       ws: `ws://localhost:${config.API_PORT}/ws`,
     },
-    'Gakki Phase 4 startup complete',
+    'Gakki Phase 5 (Internet Sources, Streaming & Persistent Metadata) startup complete',
   );
 
   // ── Graceful Shutdown ─────────────────────────────────────────

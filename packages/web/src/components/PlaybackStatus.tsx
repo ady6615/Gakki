@@ -5,6 +5,9 @@ export interface PlaybackTrack {
   name: string;
   duration: number | null;
   artist?: string | null;
+  album?: string | null;
+  artwork?: string | null;
+  source?: string | null;
 }
 
 export interface PlaybackStatePayload {
@@ -20,6 +23,10 @@ export interface QueueDisplayItem {
   name: string;
   duration?: number;
   addedBy?: string;
+  artist?: string;
+  album?: string;
+  artwork?: string;
+  source?: string;
 }
 
 export interface QueueStatePayload {
@@ -309,18 +316,42 @@ export function PlaybackStatus() {
       </div>
 
       <div className="track-section">
-        <div className="track-label">Current Track</div>
+        <div className="track-label">Now Playing</div>
         {activeTrack ? (
           <div className="track-info">
             <div className="track-icon-wrapper">
-              <span className={`disc-icon ${playback.playerState === 'PLAYING' ? 'spinning' : ''}`}>
-                💿
-              </span>
+              {activeTrack.artwork ? (
+                <img
+                  src={activeTrack.artwork}
+                  alt={activeTrack.name}
+                  className="track-cover-art"
+                  onError={(e) => {
+                    e.currentTarget.style.display = 'none';
+                  }}
+                />
+              ) : (
+                <span className={`disc-icon ${playback.playerState === 'PLAYING' ? 'spinning' : ''}`}>
+                  💿
+                </span>
+              )}
             </div>
             <div className="track-details">
-              <div className="track-name">{activeTrack.name}</div>
+              <div className="track-header-row">
+                <div className="track-name">{activeTrack.name}</div>
+                {activeTrack.source && (
+                  <span className={`track-source-badge source-${activeTrack.source}`}>
+                    {activeTrack.source === 'local' ? '📁 Local' :
+                     activeTrack.source === 'soundcloud' ? '☁️ SoundCloud' :
+                     activeTrack.source === 'http_stream' ? '🌐 Stream' :
+                     activeTrack.source}
+                  </span>
+                )}
+              </div>
               {activeTrack.artist && (
                 <div className="track-artist">{activeTrack.artist}</div>
+              )}
+              {activeTrack.album && (
+                <div className="track-album">💿 {activeTrack.album}</div>
               )}
               <div className="track-meta">
                 <span className="track-duration">
@@ -355,9 +386,20 @@ export function PlaybackStatus() {
               <div key={item.id} className="queue-item">
                 <span className="queue-item-pos">{item.position}</span>
                 <div className="queue-item-details">
-                  <span className="queue-item-name">{item.name}</span>
-                  {item.addedBy && (
-                    <span className="queue-item-by">Added by {item.addedBy}</span>
+                  <div className="queue-item-title-row">
+                    <span className="queue-item-name">{item.name}</span>
+                    {item.source && (
+                      <span className={`queue-source-tag source-${item.source}`}>
+                        {item.source}
+                      </span>
+                    )}
+                  </div>
+                  {(item.artist || item.addedBy) && (
+                    <span className="queue-item-by">
+                      {item.artist ? item.artist : ''}
+                      {item.artist && item.addedBy ? ' • ' : ''}
+                      {item.addedBy ? `Added by ${item.addedBy}` : ''}
+                    </span>
                   )}
                 </div>
                 <span className="queue-item-duration">

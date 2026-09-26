@@ -3,6 +3,7 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import pg from 'pg';
 import { createLogger } from '../utils/logger';
 import * as schema from './schema';
+import { runMigrations } from './migrate';
 
 const logger = createLogger('database');
 
@@ -40,6 +41,9 @@ export async function connectDatabase(connectionString: string): Promise<Databas
   } finally {
     client.release();
   }
+
+  // Run pending schema migrations
+  await runMigrations(pool);
 
   db = drizzle(pool, { schema });
   return db;

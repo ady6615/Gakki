@@ -1,19 +1,24 @@
 import {
   SlashCommandBuilder,
+  EmbedBuilder,
   type ChatInputCommandInteraction,
   type AutocompleteInteraction,
   type GuildMember,
   PermissionsBitField,
 } from 'discord.js';
-import type { AudioPlayerManager, PlaybackManager, QueueTrack, LoopMode } from '@gakki/core';
+import type { AudioPlayerManager, PlaybackManager, QueueTrack, LoopMode, AudioSource } from '@gakki/core';
 import {
   LocalAudioSource,
+  HttpAudioSource,
   VoicePermissionError,
   createLogger,
 } from '@gakki/core';
+import type { AudioSourceManager } from '@gakki/core';
 import { probeAudioMetadata } from '../audio/ffmpeg';
 import { listLocalAudioFiles, listLocalFolders } from '../audio/local-files';
 import { enqueueFolder, enqueueMultipleFiles } from '../audio/batch-loader';
+import { globalRateLimiter } from '../security/rate-limiter';
+import { createConfiguredAudioSourceManager } from '../sources';
 
 const logger = createLogger('discord-commands');
 
@@ -35,13 +40,30 @@ export const slashCommandDefinitions = [
 
   new SlashCommandBuilder()
     .setName('play')
-    .setDescription('Play a local audio file or add to queue if already playing')
+    .setDescription('Play a local audio file, URL, or search query')
+    .addStringOption((option) =>
+      option
+        .setName('input')
+        .setDescription('Local file name, HTTP audio URL, or SoundCloud link')
+        .setRequired(false)
+        .setAutocomplete(true),
+    )
     .addStringOption((option) =>
       option
         .setName('file')
-        .setDescription('File name in storage/music (e.g. test.mp3)')
+        .setDescription('Local file name in storage/music (legacy compatibility)')
         .setRequired(false)
         .setAutocomplete(true),
+    ),
+
+  new SlashCommandBuilder()
+    .setName('search')
+    .setDescription('Search local library and authorized audio sources')
+    .addStringOption((option) =>
+      option
+        .setName('query')
+        .setDescription('Search terms (title, artist, keywords)')
+        .setRequired(true),
     ),
 
   new SlashCommandBuilder()
@@ -248,6 +270,7 @@ export async function handleAutocomplete(
 export async function handleChatInputCommand(
   interaction: ChatInputCommandInteraction,
   manager: PlaybackManager | AudioPlayerManager,
+  audioSourceManager?: AudioSourceManager,
 ): Promise<void> {
   const playbackManager: PlaybackManager =
     'playbackManager' in manager
@@ -255,7 +278,6 @@ export async function handleChatInputCommand(
       : (manager as PlaybackManager);
 
   const { commandName, guildId } = interaction;
-
 
   if (!guildId) {
     await interaction.reply({
@@ -312,6 +334,19 @@ export async function handleChatInputCommand(
     case 'play': {
       await interaction.deferReply();
 
+      // Rate limiting
+      const userId = member?.user?.id || member?.id || 'anonymous';
+      const userLimit = globalRateLimiter.check(`user:${userId}`);
+      if (!userLimit.allowed) {
+        await interaction.editReply(`⚠️ Rate limit exceeded. Please wait ${Math.ceil(userLimit.retryAfterMs / 1000)}s.`);
+        return;
+      }
+      const guildLimit = globalRateLimiter.check(`guild:${guildId}`);
+      if (!guildLimit.allowed) {
+        await interaction.editReply(`⚠️ Guild rate limit exceeded. Please wait ${Math.ceil(guildLimit.retryAfterMs / 1000)}s.`);
+        return;
+      }
+
       // Check if bot is connected, or join user voice channel
       const currentState = playbackManager.getState(guildId);
       if (currentState.voiceState !== 'CONNECTED') {
@@ -343,51 +378,177 @@ export async function handleChatInputCommand(
         }
       }
 
-      // Determine file to play
-      let inputFileName = interaction.options.getString('file');
-      if (!inputFileName || inputFileName.trim() === '') {
+      // Determine input to play
+      let input = interaction.options.getString('input') || interaction.options.getString('file');
+      if (!input || input.trim() === '') {
         const available = await listLocalAudioFiles();
         if (available.length === 0) {
           await interaction.editReply('No local audio files found in storage/music directory.');
           return;
         }
-        inputFileName = available[0];
+        input = available[0];
+      }
+      input = input.trim();
+
+      const srcManager = audioSourceManager || createConfiguredAudioSourceManager();
+
+      let source: AudioSource;
+      let trackTitle: string;
+      let trackDuration: number | null | undefined;
+      let trackArtist: string | null | undefined;
+      let trackAlbum: string | null | undefined;
+      let trackThumb: string | null | undefined;
+      let sourceProviderName = 'Local Library';
+      let trackPath = input;
+
+      if (srcManager.canHandle(input)) {
+        try {
+          const resolved = await srcManager.resolve(input);
+          trackTitle = resolved.title;
+          trackDuration = resolved.metadata.duration ?? undefined;
+          trackArtist = resolved.metadata.artist ?? undefined;
+          trackAlbum = resolved.metadata.album ?? undefined;
+          trackThumb = resolved.metadata.thumbnailUrl ?? resolved.metadata.coverArtPath ?? undefined;
+          sourceProviderName =
+            resolved.source.provider === 'local'
+              ? 'Local Library'
+              : resolved.source.provider === 'http_stream'
+                ? 'HTTP Stream'
+                : resolved.source.provider.charAt(0).toUpperCase() + resolved.source.provider.slice(1);
+          trackPath = resolved.streamUrlOrPath;
+
+          if (
+            resolved.isStream ||
+            resolved.source.sourceType === 'stream' ||
+            resolved.streamUrlOrPath.startsWith('http://') ||
+            resolved.streamUrlOrPath.startsWith('https://')
+          ) {
+            source = new HttpAudioSource(resolved.streamUrlOrPath, resolved.metadata);
+          } else {
+            source = new LocalAudioSource(resolved.streamUrlOrPath, undefined, probeAudioMetadata);
+          }
+        } catch (err: any) {
+          logger.warn({ err, input }, '[AUDIO] Source resolution failed');
+          await interaction.editReply(err.message || `Failed to resolve source for: ${input}`);
+          return;
+        }
+      } else {
+        source = new LocalAudioSource(input, undefined, probeAudioMetadata);
+        try {
+          await source.validate();
+          const meta = await source.getMetadata();
+          trackTitle = meta.title;
+          trackDuration = meta.duration ?? undefined;
+          trackArtist = meta.artist ?? undefined;
+          trackAlbum = meta.album ?? undefined;
+        } catch (err: any) {
+          logger.warn({ err, file: input }, '[AUDIO] File validation failed');
+          await interaction.editReply(err.message || `File error for: ${input}`);
+          return;
+        }
       }
 
-      const source = new LocalAudioSource(inputFileName, undefined, probeAudioMetadata);
-
       try {
-        await source.validate();
-      } catch (err: any) {
-        logger.warn({ err, file: inputFileName }, '[AUDIO] File validation failed');
-        await interaction.editReply(err.message || `File error for: ${inputFileName}`);
-        return;
-      }
-
-      try {
-        const metadata = await source.getMetadata();
-        const durationStr = formatDuration(metadata.duration);
-
+        const durationStr = formatDuration(trackDuration);
         const playResult = await playbackManager.play(guildId, source, {
-          name: metadata.title,
-          path: inputFileName,
-          duration: metadata.duration ?? undefined,
-          artist: metadata.artist,
+          name: trackTitle,
+          path: trackPath,
+          duration: trackDuration ?? undefined,
+          artist: trackArtist,
           addedBy: member.displayName || member.user?.username,
         });
 
+        playResult.track.album = trackAlbum ?? null;
+        playResult.track.thumbnailUrl = trackThumb ?? null;
+        playResult.track.sourceProvider = sourceProviderName;
+        playResult.track.sourceUrl = input;
+
         if (playResult.status === 'started') {
-          await interaction.editReply(
-            `▶️ Started: **${metadata.title}**${metadata.artist ? ` by **${metadata.artist}**` : ''} \`[${durationStr}]\``,
-          );
+          const embed = new EmbedBuilder()
+            .setTitle('▶️ Started Playback')
+            .setDescription(`**${trackTitle}**${trackArtist ? `\n*${trackArtist}*` : ''}`)
+            .setColor(0x10b981)
+            .addFields(
+              { name: 'Duration', value: `\`${durationStr}\``, inline: true },
+              { name: 'Source', value: sourceProviderName, inline: true },
+            );
+          if (trackAlbum) {
+            embed.addFields({ name: 'Album', value: trackAlbum, inline: true });
+          }
+          if (trackThumb && trackThumb.startsWith('http')) {
+            embed.setThumbnail(trackThumb);
+          }
+
+          await interaction.editReply({
+            content: `▶️ Started: **${trackTitle}**${trackArtist ? ` by **${trackArtist}**` : ''} \`[${durationStr}]\``,
+            embeds: [embed],
+          });
         } else {
-          await interaction.editReply(
-            `➕ Added to queue: **${metadata.title}**${metadata.artist ? ` by **${metadata.artist}**` : ''}\nPosition: **${playResult.position}**`,
-          );
+          const embed = new EmbedBuilder()
+            .setTitle('➕ Added to Queue')
+            .setDescription(`**${trackTitle}**${trackArtist ? `\n*${trackArtist}*` : ''}`)
+            .setColor(0x3b82f6)
+            .addFields(
+              { name: 'Position', value: `**#${playResult.position}**`, inline: true },
+              { name: 'Duration', value: `\`${durationStr}\``, inline: true },
+              { name: 'Source', value: sourceProviderName, inline: true },
+            );
+          if (trackThumb && trackThumb.startsWith('http')) {
+            embed.setThumbnail(trackThumb);
+          }
+
+          await interaction.editReply({
+            content: `➕ Added to queue: **${trackTitle}**${trackArtist ? ` by **${trackArtist}**` : ''}\nPosition: **${playResult.position}**`,
+            embeds: [embed],
+          });
         }
       } catch (error) {
         logger.error({ err: error, guildId }, '[ERROR] Playback failed');
         await interaction.editReply(`Playback failed: ${(error as Error).message}`);
+      }
+      break;
+    }
+
+    case 'search': {
+      await interaction.deferReply();
+      const query = interaction.options.getString('query', true);
+
+      const userId = member?.user?.id || member?.id || 'anonymous';
+      const userLimit = globalRateLimiter.check(`user:${userId}`);
+      if (!userLimit.allowed) {
+        await interaction.editReply(`⚠️ Rate limit exceeded. Please wait ${Math.ceil(userLimit.retryAfterMs / 1000)}s.`);
+        return;
+      }
+
+      try {
+        const srcManager = audioSourceManager || createConfiguredAudioSourceManager();
+        const results = await srcManager.search(query, { limit: 5 });
+
+        if (results.length === 0) {
+          await interaction.editReply(`No search results found for: "${query}"`);
+          return;
+        }
+
+        const embed = new EmbedBuilder()
+          .setTitle(`🔎 Search Results for "${query}"`)
+          .setColor(0x7c3aed);
+
+        let description = '';
+        results.forEach((r, idx) => {
+          const dur = r.duration ? ` \`[${formatDuration(r.duration)}]\`` : '';
+          const artist = r.artist ? ` — *${r.artist}*` : '';
+          description += `**${idx + 1}.** ${r.title}${artist}${dur} *(Source: ${r.provider})*\n`;
+        });
+        description += `\n*To play a track, type \`/play <sourceUrl or title>\`*`;
+        embed.setDescription(description);
+
+        await interaction.editReply({
+          content: `Found ${results.length} result(s) for "${query}".`,
+          embeds: [embed],
+        });
+      } catch (err: any) {
+        logger.error({ err, query }, '[ERROR] Search failed');
+        await interaction.editReply(`Search error: ${err.message}`);
       }
       break;
     }
@@ -549,8 +710,31 @@ export async function handleChatInputCommand(
       }
 
       const durationStr = formatDuration(currentTrack.duration);
+      const queueEvent = playbackManager.getQueueEvent(guildId);
+      const queueTrack = queueEvent.currentTrack;
+
+      const embed = new EmbedBuilder()
+        .setTitle('🎵 NOW PLAYING')
+        .setDescription(`**${currentTrack.name}**${currentTrack.artist ? `\n*${currentTrack.artist}*` : ''}`)
+        .setColor(0x7c3aed)
+        .addFields(
+          { name: 'Duration', value: `\`${durationStr}\``, inline: true },
+          { name: 'Status', value: state.playerState, inline: true },
+        );
+
+      if (queueTrack?.album) {
+        embed.addFields({ name: 'Album', value: queueTrack.album, inline: true });
+      }
+      if (queueTrack?.sourceProvider) {
+        embed.addFields({ name: 'Source', value: queueTrack.sourceProvider, inline: true });
+      }
+      if (queueTrack?.thumbnailUrl && queueTrack.thumbnailUrl.startsWith('http')) {
+        embed.setThumbnail(queueTrack.thumbnailUrl);
+      }
+
       await interaction.reply({
         content: `**Now Playing:** ${currentTrack.name}${currentTrack.artist ? ` — *${currentTrack.artist}*` : ''}\n**Status:** ${state.playerState}\n**Duration:** \`${durationStr}\``,
+        embeds: [embed],
       });
       break;
     }

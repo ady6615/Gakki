@@ -198,13 +198,33 @@ function createMockInteraction(options: {
     deferReply: async () => {
       isDeferred = true;
     },
-    editReply: async (content: string) => {
-      repliedText = content;
+    editReply: async (content: any) => {
+      if (typeof content === 'string') {
+        repliedText = content;
+      } else if (content?.content) {
+        repliedText = content.content;
+      } else if (content?.embeds && content.embeds.length > 0) {
+        const embed = content.embeds[0];
+        const data = typeof embed?.toJSON === 'function' ? embed.toJSON() : embed;
+        repliedText = `${data?.title || ''} ${data?.description || ''} ${(data?.fields || []).map((f: any) => `${f.name}: ${f.value}`).join(' ')}`;
+      } else {
+        repliedText = JSON.stringify(content);
+      }
       isReplied = true;
       return content;
     },
     reply: async (msg: any) => {
-      repliedText = typeof msg === 'string' ? msg : msg.content;
+      if (typeof msg === 'string') {
+        repliedText = msg;
+      } else if (msg?.content) {
+        repliedText = msg.content;
+      } else if (msg?.embeds && msg.embeds.length > 0) {
+        const embed = msg.embeds[0];
+        const data = typeof embed?.toJSON === 'function' ? embed.toJSON() : embed;
+        repliedText = `${data?.title || ''} ${data?.description || ''} ${(data?.fields || []).map((f: any) => `${f.name}: ${f.value}`).join(' ')}`;
+      } else {
+        repliedText = JSON.stringify(msg);
+      }
       isReplied = true;
       return msg;
     },

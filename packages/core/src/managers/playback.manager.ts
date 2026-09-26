@@ -2,6 +2,7 @@ import type { Logger } from 'pino';
 import { randomUUID } from 'node:crypto';
 import type { AudioSource } from '../audio/audio-source';
 import { LocalAudioSource } from '../audio/local-audio.source';
+import { HttpAudioSource } from '../audio/http-audio.source';
 import type { VoicePlatformAdapter, AdapterPlayOptions } from '../types/platform';
 import type {
   VoicePlatformState,
@@ -14,15 +15,18 @@ import type {
   AudioFilterConfig,
   LoopMode,
   GuildPlaybackState,
+  GuildSettings,
   PlaybackSettingsUpdatedEvent,
+  GuildSettingsUpdatedEvent,
   VoiceLifecycleUpdatedEvent,
 } from '../types/queue';
 import { QueueManager } from './queue.manager';
 import { VoiceLifecycleManager } from './voice-lifecycle.manager';
+import type { GuildSettingsManager } from './guild-settings.manager';
 
 type StateChangeListener = (state: VoicePlatformState) => void;
 type QueueUpdateListener = (event: QueueUpdatedEvent) => void;
-type SettingsUpdateListener = (event: PlaybackSettingsUpdatedEvent) => void;
+type SettingsUpdateListener = (event: PlaybackSettingsUpdatedEvent | GuildSettingsUpdatedEvent) => void;
 type LifecycleUpdateListener = (event: VoiceLifecycleUpdatedEvent) => void;
 type ErrorListener = (guildId: string, error: Error) => void;
 
@@ -63,6 +67,7 @@ export class PlaybackManager {
     private readonly logger: Logger,
     public readonly queueManager: QueueManager,
     defaultTimeoutSeconds: number = 300,
+    public readonly guildSettingsManager?: GuildSettingsManager,
   ) {
     this.logger.debug('PlaybackManager initialized');
 
@@ -91,6 +96,68 @@ export class PlaybackManager {
     this.queueManager.onQueueChange((guildId) => {
       this.emitQueueUpdate(guildId);
     });
+
+    // If persistent settings manager is provided, preload settings
+    if (this.guildSettingsManager) {
+      this.guildSettingsManager.loadAllSettings().then((allSettings) => {
+        for (const [guildId, s] of allSettings) {
+          this.guildVolumes.set(guildId, s.volume);
+          this.guildFilters.set(guildId, s.filters);
+          this.guildLoopModes.set(guildId, s.loopMode);
+          this.voiceLifecycleManager.setStayInChannel(guildId, s.stayInChannel);
+          this.voiceLifecycleManager.setTimeoutSeconds(guildId, s.voiceIdleTimeout);
+        }
+      }).catch((err) => {
+        this.logger.error({ err }, 'Failed to pre-load guild settings in PlaybackManager');
+      });
+    }
+  }
+
+  /**
+   * Create an AudioSource appropriate for the given track (local file or HTTP stream).
+   */
+  public createAudioSource(track: QueueTrack): AudioSource {
+    if (track.path.startsWith('http://') || track.path.startsWith('https://')) {
+      return new HttpAudioSource(track.path, {
+        title: track.name,
+        artist: track.artist ?? null,
+        album: track.album ?? null,
+        duration: track.duration ?? null,
+      });
+    }
+    return new LocalAudioSource(track.path);
+  }
+
+  /**
+   * Persist guild settings asynchronously to PostgreSQL.
+   */
+  private saveGuildSettings(guildId: string): void {
+    if (!this.guildSettingsManager) return;
+    const settings: GuildSettings = {
+      guildId,
+      volume: this.getVolume(guildId),
+      filters: this.getFilters(guildId),
+      loopMode: this.getLoopMode(guildId),
+      stayInChannel: this.isStayInChannel(guildId),
+      voiceIdleTimeout: this.voiceLifecycleManager.getTimeoutSeconds(guildId),
+    };
+    this.guildSettingsManager.saveSettings(settings).catch((err) => {
+      this.logger.error({ err, guildId }, 'Failed to persist guild settings asynchronously');
+    });
+  }
+
+  /**
+   * Explicitly load settings for a guild from PostgreSQL if not already in memory.
+   */
+  async loadGuildSettings(guildId: string): Promise<GuildSettings | null> {
+    if (!this.guildSettingsManager) return null;
+    const settings = await this.guildSettingsManager.getSettings(guildId);
+    this.guildVolumes.set(guildId, settings.volume);
+    this.guildFilters.set(guildId, settings.filters);
+    this.guildLoopModes.set(guildId, settings.loopMode);
+    this.voiceLifecycleManager.setStayInChannel(guildId, settings.stayInChannel);
+    this.voiceLifecycleManager.setTimeoutSeconds(guildId, settings.voiceIdleTimeout);
+    return settings;
   }
 
   /**
@@ -253,7 +320,7 @@ export class PlaybackManager {
   private async replayCurrentTrack(guildId: string, track: QueueTrack): Promise<void> {
     try {
       const adapter = this.ensureAdapter();
-      const source = new LocalAudioSource(track.path);
+      const source = this.createAudioSource(track);
       await source.validate();
 
       this.endReasons.set(guildId, 'finished');
@@ -316,7 +383,7 @@ export class PlaybackManager {
       while (nextTrack && attempts < maxAttempts) {
         attempts++;
         try {
-          const source = new LocalAudioSource(nextTrack.path);
+          const source = this.createAudioSource(nextTrack);
           await source.validate();
 
           this.endReasons.set(guildId, 'finished');
@@ -394,7 +461,7 @@ export class PlaybackManager {
 
     // Play next track
     try {
-      const source = new LocalAudioSource(nextTrack.path);
+      const source = this.createAudioSource(nextTrack);
       await source.validate();
       this.endReasons.set(guildId, 'finished');
       this.currentTracks.set(guildId, nextTrack);
@@ -468,6 +535,7 @@ export class PlaybackManager {
     }
 
     this.logger.info({ guildId, volume: clamped }, '[AUDIO] Volume changed: %d%', clamped);
+    this.saveGuildSettings(guildId);
     this.emitSettingsUpdate(guildId);
     return clamped;
   }
@@ -499,6 +567,7 @@ export class PlaybackManager {
       await this.adapter.rebuildCurrentStream(guildId, filters);
     }
 
+    this.saveGuildSettings(guildId);
     this.emitSettingsUpdate(guildId);
     return filters;
   }
@@ -518,6 +587,7 @@ export class PlaybackManager {
       await this.adapter.rebuildCurrentStream(guildId, filters);
     }
 
+    this.saveGuildSettings(guildId);
     this.emitSettingsUpdate(guildId);
     return filters;
   }
@@ -536,6 +606,7 @@ export class PlaybackManager {
       await this.adapter.rebuildCurrentStream(guildId, filters);
     }
 
+    this.saveGuildSettings(guildId);
     this.emitSettingsUpdate(guildId);
     return filters;
   }
@@ -553,6 +624,7 @@ export class PlaybackManager {
   setLoopMode(guildId: string, mode: LoopMode): LoopMode {
     this.guildLoopModes.set(guildId, mode);
     this.logger.info({ guildId, loopMode: mode }, '[LOOP] Mode changed: %s', mode);
+    this.saveGuildSettings(guildId);
     this.emitSettingsUpdate(guildId);
     return mode;
   }
@@ -562,6 +634,7 @@ export class PlaybackManager {
    */
   setStayInChannel(guildId: string, stay: boolean): boolean {
     this.voiceLifecycleManager.setStayInChannel(guildId, stay);
+    this.saveGuildSettings(guildId);
     this.emitSettingsUpdate(guildId);
     return stay;
   }
@@ -571,6 +644,23 @@ export class PlaybackManager {
    */
   isStayInChannel(guildId: string): boolean {
     return this.voiceLifecycleManager.isStayInChannel(guildId);
+  }
+
+  /**
+   * Set voice idle timeout seconds.
+   */
+  setTimeoutSeconds(guildId: string, seconds: number): number {
+    this.voiceLifecycleManager.setTimeoutSeconds(guildId, seconds);
+    this.saveGuildSettings(guildId);
+    this.emitSettingsUpdate(guildId);
+    return seconds;
+  }
+
+  /**
+   * Get voice idle timeout seconds.
+   */
+  getTimeoutSeconds(guildId: string): number {
+    return this.voiceLifecycleManager.getTimeoutSeconds(guildId);
   }
 
   // ── Queue Manipulation ────────────────────────────────────────────
@@ -664,7 +754,13 @@ export class PlaybackManager {
         ? {
             id: current.id,
             name: current.name,
+            artist: current.artist ?? null,
+            album: current.album ?? null,
+            thumbnailUrl: current.thumbnailUrl ?? null,
+            sourceProvider: current.sourceProvider ?? null,
             duration: current.duration ?? null,
+            source: current.source ?? current.sourceProvider ?? null,
+            artwork: current.artwork ?? current.thumbnailUrl ?? null,
           }
         : null,
       queue: this.queueManager.getDisplayQueue(guildId),
@@ -728,9 +824,23 @@ export class PlaybackManager {
       stayInChannel: this.isStayInChannel(guildId),
     };
 
+    const guildEvent: GuildSettingsUpdatedEvent = {
+      type: 'guild.settings.updated',
+      guildId,
+      settings: {
+        guildId,
+        volume: this.getVolume(guildId),
+        filters: this.getFilters(guildId),
+        loopMode: this.getLoopMode(guildId),
+        stayInChannel: this.isStayInChannel(guildId),
+        voiceIdleTimeout: this.voiceLifecycleManager.getTimeoutSeconds(guildId),
+      },
+    };
+
     for (const listener of this.settingsListeners) {
       try {
         listener(event);
+        listener(guildEvent);
       } catch (err) {
         this.logger.error({ err, guildId }, 'Error in settings update listener');
       }
