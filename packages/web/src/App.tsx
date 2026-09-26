@@ -1,5 +1,6 @@
 import { HealthCheck } from './components/HealthCheck';
 import { PlaybackStatus } from './components/PlaybackStatus';
+import { PlaylistSection } from './components/PlaylistSection';
 
 function App() {
   return (
@@ -14,11 +15,12 @@ function App() {
 
       <main className="app-main">
         <PlaybackStatus />
+        <PlaylistSection />
         <HealthCheck />
       </main>
 
       <footer className="app-footer">
-        <p>Gakki v0.4.0 — Phase 4 Voice Lifecycle & Audio Effects</p>
+        <p>Gakki v0.6.0 — Phase 6 Play History, Persistent Playlists & Session Analytics</p>
       </footer>
     </div>
   );

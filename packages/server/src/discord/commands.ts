@@ -6,14 +6,23 @@ import {
   type GuildMember,
   PermissionsBitField,
 } from 'discord.js';
-import type { AudioPlayerManager, PlaybackManager, QueueTrack, LoopMode, AudioSource } from '@gakki/core';
+import type {
+  AudioPlayerManager,
+  PlaybackManager,
+  QueueTrack,
+  LoopMode,
+  AudioSource,
+  AudioSourceManager,
+  AnalyticsManager,
+  PlaylistManager,
+  TrackManager,
+} from '@gakki/core';
 import {
   LocalAudioSource,
   HttpAudioSource,
   VoicePermissionError,
   createLogger,
 } from '@gakki/core';
-import type { AudioSourceManager } from '@gakki/core';
 import { probeAudioMetadata } from '../audio/ffmpeg';
 import { listLocalAudioFiles, listLocalFolders } from '../audio/local-files';
 import { enqueueFolder, enqueueMultipleFiles } from '../audio/batch-loader';
@@ -64,6 +73,108 @@ export const slashCommandDefinitions = [
         .setName('query')
         .setDescription('Search terms (title, artist, keywords)')
         .setRequired(true),
+    ),
+
+  new SlashCommandBuilder()
+    .setName('history')
+    .setDescription('Show recent playback history for this server')
+    .addIntegerOption((option) =>
+      option
+        .setName('limit')
+        .setDescription('Number of records to show (default 10, max 25)')
+        .setRequired(false)
+        .setMinValue(1)
+        .setMaxValue(25),
+    ),
+
+  new SlashCommandBuilder()
+    .setName('recent')
+    .setDescription('Show compact list of recently played tracks')
+    .addIntegerOption((option) =>
+      option
+        .setName('limit')
+        .setDescription('Number of tracks to show (default 5, max 15)')
+        .setRequired(false)
+        .setMinValue(1)
+        .setMaxValue(15),
+    ),
+
+  new SlashCommandBuilder()
+    .setName('playlist')
+    .setDescription('Manage and play playlists')
+    .addSubcommand((sub) =>
+      sub
+        .setName('create')
+        .setDescription('Create a new playlist')
+        .addStringOption((opt) =>
+          opt.setName('name').setDescription('Playlist name').setRequired(true),
+        )
+        .addStringOption((opt) =>
+          opt.setName('description').setDescription('Optional description').setRequired(false),
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('visibility')
+            .setDescription('Playlist visibility')
+            .setRequired(false)
+            .addChoices(
+              { name: 'Server (shared with this guild)', value: 'guild' },
+              { name: 'Private (only you)', value: 'private' },
+              { name: 'Public (all guilds)', value: 'public' },
+            ),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub.setName('list').setDescription('List available playlists for you and this server'),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('play')
+        .setDescription('Enqueue and play an entire playlist')
+        .addStringOption((opt) =>
+          opt.setName('name').setDescription('Playlist name').setRequired(true).setAutocomplete(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('add')
+        .setDescription('Add a song to a playlist')
+        .addStringOption((opt) =>
+          opt.setName('name').setDescription('Playlist name').setRequired(true).setAutocomplete(true),
+        )
+        .addStringOption((opt) =>
+          opt.setName('track').setDescription('Track name, URL, or local file').setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('remove')
+        .setDescription('Remove a track from a playlist by its position number')
+        .addStringOption((opt) =>
+          opt.setName('name').setDescription('Playlist name').setRequired(true).setAutocomplete(true),
+        )
+        .addIntegerOption((opt) =>
+          opt.setName('index').setDescription('Track position number (1, 2, ...)').setRequired(true).setMinValue(1),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('rename')
+        .setDescription('Rename an existing playlist')
+        .addStringOption((opt) =>
+          opt.setName('name').setDescription('Current playlist name').setRequired(true).setAutocomplete(true),
+        )
+        .addStringOption((opt) =>
+          opt.setName('new_name').setDescription('New playlist name').setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('delete')
+        .setDescription('Delete a playlist')
+        .addStringOption((opt) =>
+          opt.setName('name').setDescription('Playlist name to delete').setRequired(true).setAutocomplete(true),
+        ),
     ),
 
   new SlashCommandBuilder()
@@ -234,10 +345,11 @@ export const slashCommandDefinitions = [
 ];
 
 /**
- * Handle slash command autocompletion for /play and /addqueue options.
+ * Handle slash command autocompletion for /play, /addqueue, and /playlist options.
  */
 export async function handleAutocomplete(
   interaction: AutocompleteInteraction,
+  playlistManager?: PlaylistManager,
 ): Promise<void> {
   const focusedOption = interaction.options.getFocused(true);
 
@@ -261,6 +373,32 @@ export async function handleAutocomplete(
     await interaction.respond(
       filtered.map((folder) => ({ name: folder, value: folder })),
     );
+  } else if (focusedOption.name === 'name' && playlistManager) {
+    const member = interaction.member as GuildMember;
+    const guildId = interaction.guildId || undefined;
+    const userId = member?.user?.id || member?.id;
+    const query = (focusedOption.value || '').toLowerCase();
+
+    try {
+      const { userPlaylists, guildPlaylists } = await playlistManager.listPlaylists({ guildId, userId });
+      const combined = [...userPlaylists, ...guildPlaylists];
+      const seen = new Set<string>();
+      const unique = combined.filter((p) => {
+        if (seen.has(p.id)) return false;
+        seen.add(p.id);
+        return true;
+      });
+
+      const filtered = unique
+        .filter((p) => p.name.toLowerCase().includes(query))
+        .slice(0, 25);
+
+      await interaction.respond(
+        filtered.map((p) => ({ name: p.name, value: p.name })),
+      );
+    } catch {
+      await interaction.respond([]);
+    }
   }
 }
 
@@ -271,6 +409,9 @@ export async function handleChatInputCommand(
   interaction: ChatInputCommandInteraction,
   manager: PlaybackManager | AudioPlayerManager,
   audioSourceManager?: AudioSourceManager,
+  analyticsManager?: AnalyticsManager,
+  playlistManager?: PlaylistManager,
+  trackManager?: TrackManager,
 ): Promise<void> {
   const playbackManager: PlaybackManager =
     'playbackManager' in manager
@@ -455,13 +596,13 @@ export async function handleChatInputCommand(
           path: trackPath,
           duration: trackDuration ?? undefined,
           artist: trackArtist,
+          album: trackAlbum,
+          thumbnailUrl: trackThumb,
+          sourceProvider: sourceProviderName,
+          sourceUrl: input,
           addedBy: member.displayName || member.user?.username,
+          userId: member.user?.id || member.id,
         });
-
-        playResult.track.album = trackAlbum ?? null;
-        playResult.track.thumbnailUrl = trackThumb ?? null;
-        playResult.track.sourceProvider = sourceProviderName;
-        playResult.track.sourceUrl = input;
 
         if (playResult.status === 'started') {
           const embed = new EmbedBuilder()
@@ -906,6 +1047,346 @@ export async function handleChatInputCommand(
       const stay = mode === 'on';
       playbackManager.setStayInChannel(guildId, stay);
       await interaction.reply(`🛡️ Stay-in-channel mode turned **${stay ? 'ON' : 'OFF'}**`);
+      break;
+    }
+
+    case 'history': {
+      await interaction.deferReply();
+      if (!analyticsManager) {
+        await interaction.editReply('History service is currently unavailable.');
+        return;
+      }
+
+      const limit = interaction.options.getInteger('limit') || 10;
+      const { events } = await analyticsManager.getGuildHistory(guildId, { limit });
+
+      if (events.length === 0) {
+        await interaction.editReply('No playback history found for this server.');
+        return;
+      }
+
+      const embed = new EmbedBuilder()
+        .setTitle('🎵 PLAY HISTORY')
+        .setColor(0x6366f1)
+        .setDescription(
+          events
+            .map((e, idx) => {
+              const dateStr = new Date(e.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+              const listenedStr = formatDuration(e.durationListened);
+              const statusStr = e.completed ? 'Finished' : e.endReason === 'skipped' ? `Skipped at ${listenedStr}` : (e.endReason || 'Stopped');
+              return `${idx + 1}. **${e.track.title}**${e.track.artist ? ` — *${e.track.artist}*` : ''}\n   *${dateStr}* • Played \`${listenedStr}\` • ${statusStr}`;
+            })
+            .join('\n\n'),
+        )
+        .setFooter({ text: `Showing recent ${events.length} tracks` });
+
+      await interaction.editReply({ embeds: [embed] });
+      break;
+    }
+
+    case 'recent': {
+      await interaction.deferReply();
+      if (!analyticsManager) {
+        await interaction.editReply('History service is currently unavailable.');
+        return;
+      }
+
+      const limit = interaction.options.getInteger('limit') || 5;
+      const recent = await analyticsManager.getRecentTracks(guildId, limit);
+
+      if (recent.length === 0) {
+        await interaction.editReply('No recently played tracks found.');
+        return;
+      }
+
+      const embed = new EmbedBuilder()
+        .setTitle('🕒 Recently Played')
+        .setColor(0x3b82f6)
+        .setDescription(
+          recent
+            .map((r, idx) => {
+              const timeStr = new Date(r.lastPlayedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+              return `${idx + 1}. **${r.title}**${r.artist ? ` — *${r.artist}*` : ''} • *${timeStr}*`;
+            })
+            .join('\n'),
+        );
+
+      await interaction.editReply({ embeds: [embed] });
+      break;
+    }
+
+    case 'playlist': {
+      if (!playlistManager) {
+        await interaction.reply({ content: 'Playlist service is currently unavailable.', ephemeral: true });
+        return;
+      }
+
+      const subcommand = interaction.options.getSubcommand();
+      const userId = member.user?.id || member.id;
+
+      switch (subcommand) {
+        case 'create': {
+          const name = interaction.options.getString('name', true);
+          const description = interaction.options.getString('description') || undefined;
+          const visibility = (interaction.options.getString('visibility') as any) || 'guild';
+
+          try {
+            const playlist = await playlistManager.createPlaylist({
+              name,
+              description,
+              ownerUserId: userId,
+              guildId,
+              visibility,
+            });
+            await interaction.reply(`✅ Created playlist **${playlist.name}** (${playlist.visibility})`);
+          } catch (err: any) {
+            await interaction.reply({ content: `Failed to create playlist: ${err.message}`, ephemeral: true });
+          }
+          break;
+        }
+
+        case 'list': {
+          await interaction.deferReply();
+          try {
+            const { userPlaylists, guildPlaylists } = await playlistManager.listPlaylists({ guildId, userId });
+
+            if (userPlaylists.length === 0 && guildPlaylists.length === 0) {
+              await interaction.editReply('No playlists found. Create one with `/playlist create <name>`!');
+              return;
+            }
+
+            const embed = new EmbedBuilder()
+              .setTitle('📂 PLAYLISTS')
+              .setColor(0x8b5cf6);
+
+            if (userPlaylists.length > 0) {
+              embed.addFields({
+                name: '👤 My Playlists',
+                value: userPlaylists.map((p) => `• **${p.name}** (${p.trackCount} tracks)`).join('\n'),
+              });
+            }
+
+            if (guildPlaylists.length > 0) {
+              embed.addFields({
+                name: '🌐 Server Playlists',
+                value: guildPlaylists.map((p) => `• **${p.name}** (${p.trackCount} tracks)`).join('\n'),
+              });
+            }
+
+            await interaction.editReply({ embeds: [embed] });
+          } catch (err: any) {
+            await interaction.editReply(`Failed to list playlists: ${err.message}`);
+          }
+          break;
+        }
+
+        case 'play': {
+          await interaction.deferReply();
+          const name = interaction.options.getString('name', true);
+          const playlist = await playlistManager.findPlaylistByName(name, { guildId, userId });
+
+          if (!playlist) {
+            await interaction.editReply(`Playlist **${name}** not found or you do not have permission to view it.`);
+            return;
+          }
+
+          if (!userVoiceChannel) {
+            await interaction.editReply('You must be in a voice channel to play a playlist.');
+            return;
+          }
+
+          // Ensure bot joins voice channel
+          try {
+            await playbackManager.join(guildId, userVoiceChannel.id, {
+              guild: interaction.guild,
+              channelId: userVoiceChannel.id,
+              adapterCreator: interaction.guild?.voiceAdapterCreator,
+            });
+          } catch (err: any) {
+            logger.warn({ err }, 'Could not join voice channel for playlist playback');
+          }
+
+          const playlistData = await playlistManager.getPlaylist(playlist.id);
+          if (!playlistData || playlistData.tracks.length === 0) {
+            await interaction.editReply(`Playlist **${playlist.name}** is empty.`);
+            return;
+          }
+
+          let enqueuedCount = 0;
+          let skippedCount = 0;
+
+          for (const pt of playlistData.tracks) {
+            if (!pt.source || !pt.source.sourceUrl) {
+              logger.warn({ trackId: pt.trackId, title: pt.track?.title }, '[PLAYLIST] Skipped unavailable track');
+              skippedCount++;
+              continue;
+            }
+
+            const trackPath = pt.source.sourceUrl;
+            const isStream =
+              pt.source.sourceType === 'stream' ||
+              trackPath.startsWith('http://') ||
+              trackPath.startsWith('https://');
+
+            const queueTrack: QueueTrack = {
+              id: pt.id || pt.trackId,
+              trackId: pt.trackId,
+              name: pt.track?.title || 'Unknown Track',
+              path: trackPath,
+              duration: pt.track?.duration ?? undefined,
+              artist: pt.track?.artist ?? undefined,
+              album: pt.track?.album ?? undefined,
+              thumbnailUrl: pt.track?.coverArt ?? undefined,
+              sourceProvider: pt.source.provider,
+              sourceUrl: trackPath,
+              source: pt.source.provider,
+              artwork: pt.track?.coverArt ?? undefined,
+              addedBy: pt.addedBy || member.displayName || member.user?.username,
+              userId,
+            };
+
+            const current = playbackManager.getCurrentTrack(guildId);
+            const status = playbackManager.getPlaybackStatus(guildId);
+
+            if (!current && status === 'IDLE' && enqueuedCount === 0) {
+              const audioSource = isStream
+                ? new HttpAudioSource(trackPath, {
+                    title: queueTrack.name,
+                    artist: queueTrack.artist,
+                    album: queueTrack.album,
+                    duration: queueTrack.duration,
+                  })
+                : new LocalAudioSource(trackPath, undefined, probeAudioMetadata);
+
+              await playbackManager.play(guildId, audioSource, queueTrack);
+            } else {
+              playbackManager.queueManager.addTrack(guildId, queueTrack);
+            }
+            enqueuedCount++;
+          }
+
+          const responseText = skippedCount > 0
+            ? `🎶 Enqueued **${enqueuedCount}** tracks from playlist **${playlist.name}** (⚠️ skipped ${skippedCount} unavailable tracks)`
+            : `🎶 Enqueued **${enqueuedCount}** tracks from playlist **${playlist.name}**`;
+
+          await interaction.editReply(responseText);
+          break;
+        }
+
+        case 'add': {
+          await interaction.deferReply();
+          const name = interaction.options.getString('name', true);
+          const trackInput = interaction.options.getString('track', true);
+
+          const playlist = await playlistManager.findPlaylistByName(name, { guildId, userId });
+          if (!playlist) {
+            await interaction.editReply(`Playlist **${name}** not found.`);
+            return;
+          }
+
+          // Resolve track via AudioSourceManager & TrackManager
+          const srcManager = audioSourceManager || createConfiguredAudioSourceManager();
+          let resolvedTrackId: string | null = null;
+          let trackTitle = trackInput;
+
+          try {
+            if (srcManager.canHandle(trackInput)) {
+              const resolved = await srcManager.resolve(trackInput);
+              trackTitle = resolved.title;
+              if (trackManager) {
+                const saved = await trackManager.saveTrackWithSource(resolved.metadata, resolved.source);
+                resolvedTrackId = saved.track.id;
+              }
+            } else {
+              const localSource = new LocalAudioSource(trackInput, undefined, probeAudioMetadata);
+              await localSource.validate();
+              const meta = await localSource.getMetadata();
+              trackTitle = meta.title;
+              if (trackManager) {
+                const saved = await trackManager.saveTrackWithSource(
+                  meta,
+                  { provider: 'local', sourceType: 'file', sourceUrl: trackInput },
+                );
+                resolvedTrackId = saved.track.id;
+              }
+            }
+          } catch (err: any) {
+            await interaction.editReply(`Could not resolve track: ${err.message}`);
+            return;
+          }
+
+          if (!resolvedTrackId) {
+            await interaction.editReply('Could not save track to database.');
+            return;
+          }
+
+          const added = await playlistManager.addTrackToPlaylist(
+            playlist.id,
+            resolvedTrackId,
+            member.displayName || member.user?.username,
+          );
+
+          await interaction.editReply(
+            `✅ Added **${trackTitle}** to playlist **${playlist.name}** at position #${added.position}`,
+          );
+          break;
+        }
+
+        case 'remove': {
+          const name = interaction.options.getString('name', true);
+          const index = interaction.options.getInteger('index', true);
+
+          const playlist = await playlistManager.findPlaylistByName(name, { guildId, userId });
+          if (!playlist) {
+            await interaction.reply({ content: `Playlist **${name}** not found.`, ephemeral: true });
+            return;
+          }
+
+          const removed = await playlistManager.removeTrackFromPlaylist(playlist.id, index);
+          if (removed) {
+            await interaction.reply(`🗑️ Removed track #${index} from playlist **${playlist.name}**`);
+          } else {
+            await interaction.reply({ content: `Could not remove track #${index} from playlist.`, ephemeral: true });
+          }
+          break;
+        }
+
+        case 'rename': {
+          const name = interaction.options.getString('name', true);
+          const newName = interaction.options.getString('new_name', true);
+
+          const playlist = await playlistManager.findPlaylistByName(name, { guildId, userId });
+          if (!playlist) {
+            await interaction.reply({ content: `Playlist **${name}** not found.`, ephemeral: true });
+            return;
+          }
+
+          try {
+            await playlistManager.renamePlaylist(playlist.id, newName, userId);
+            await interaction.reply(`✏️ Renamed playlist **${name}** to **${newName}**`);
+          } catch (err: any) {
+            await interaction.reply({ content: `Failed to rename playlist: ${err.message}`, ephemeral: true });
+          }
+          break;
+        }
+
+        case 'delete': {
+          const name = interaction.options.getString('name', true);
+          const playlist = await playlistManager.findPlaylistByName(name, { guildId, userId });
+          if (!playlist) {
+            await interaction.reply({ content: `Playlist **${name}** not found.`, ephemeral: true });
+            return;
+          }
+
+          try {
+            await playlistManager.deletePlaylist(playlist.id, userId);
+            await interaction.reply(`🗑️ Deleted playlist **${playlist.name}**`);
+          } catch (err: any) {
+            await interaction.reply({ content: `Failed to delete playlist: ${err.message}`, ephemeral: true });
+          }
+          break;
+        }
+      }
       break;
     }
 

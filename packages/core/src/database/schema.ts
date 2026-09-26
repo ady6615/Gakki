@@ -56,6 +56,9 @@ export const playlists = pgTable('playlists', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: varchar('name', { length: 255 }).notNull(),
   description: text('description'),
+  ownerUserId: varchar('owner_user_id', { length: 100 }),
+  guildId: varchar('guild_id', { length: 100 }),
+  visibility: varchar('visibility', { length: 50 }).notNull().default('guild'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
@@ -70,17 +73,26 @@ export const playlistTracks = pgTable('playlist_tracks', {
     .notNull()
     .references(() => tracks.id, { onDelete: 'cascade' }),
   position: integer('position').notNull(),
+  addedBy: varchar('added_by', { length: 100 }),
   addedAt: timestamp('added_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
-/** Playback event log — recorded for analytics */
+/** Playback event log — recorded for history & analytics */
 export const playbackEvents = pgTable('playback_events', {
   id: uuid('id').primaryKey().defaultRandom(),
+  guildId: varchar('guild_id', { length: 100 }),
   trackId: uuid('track_id')
     .notNull()
     .references(() => tracks.id, { onDelete: 'cascade' }),
-  guildId: varchar('guild_id', { length: 100 }),
-  platform: varchar('platform', { length: 50 }).notNull(),
-  playedAt: timestamp('played_at', { withTimezone: true }).defaultNow().notNull(),
-  durationPlayedSeconds: integer('duration_played_seconds'),
+  userId: varchar('user_id', { length: 100 }),
+  platform: varchar('platform', { length: 50 }).default('discord'),
+  startedAt: timestamp('started_at', { withTimezone: true }).defaultNow().notNull(),
+  endedAt: timestamp('ended_at', { withTimezone: true }),
+  durationListened: integer('duration_listened').notNull().default(0),
+  trackDuration: integer('track_duration'),
+  completed: boolean('completed').notNull().default(false),
+  endReason: varchar('end_reason', { length: 50 }), // 'finished' | 'skipped' | 'stopped' | 'error'
+  source: varchar('source', { length: 100 }),
+  sessionId: varchar('session_id', { length: 100 }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });

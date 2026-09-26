@@ -330,4 +330,35 @@ export class QueueManager {
   deleteQueue(guildId: string): void {
     this.queues.delete(guildId);
   }
+
+  /**
+   * Get all active guild IDs.
+   */
+  getAllGuildIds(): string[] {
+    return Array.from(this.queues.keys());
+  }
+
+  /**
+   * Serialize active queues for graceful shutdown or restoration.
+   */
+  serializeQueues(): Record<string, QueueTrack[]> {
+    const serialized: Record<string, QueueTrack[]> = {};
+    for (const [guildId, queue] of this.queues.entries()) {
+      if (queue.tracks.length > 0) {
+        serialized[guildId] = [...queue.tracks];
+      }
+    }
+    return serialized;
+  }
+
+  /**
+   * Restore serialized queues on restart.
+   */
+  restoreQueues(serialized: Record<string, QueueTrack[]>): void {
+    for (const [guildId, tracks] of Object.entries(serialized)) {
+      const queue = this.getOrCreateQueue(guildId);
+      queue.tracks = [...tracks];
+      this.notifyChange(guildId);
+    }
+  }
 }

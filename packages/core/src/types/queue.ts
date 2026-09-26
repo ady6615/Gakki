@@ -6,10 +6,12 @@ import type { Track } from './track';
  */
 export interface QueueTrack {
   id: string;
+  trackId?: string; // Persistent PostgreSQL track ID
   name: string;
   path: string; // sanitized relative path e.g. "test.mp3" or stream URL
   duration?: number;
   addedBy?: string;
+  userId?: string; // Discord user ID who requested the track
   artist?: string | null;
   album?: string | null;
   thumbnailUrl?: string | null;

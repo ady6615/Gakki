@@ -23,12 +23,25 @@ import type {
 import { QueueManager } from './queue.manager';
 import { VoiceLifecycleManager } from './voice-lifecycle.manager';
 import type { GuildSettingsManager } from './guild-settings.manager';
+import type { AnalyticsManager } from './analytics.manager';
+import type { TrackManager } from './track.manager';
 
 type StateChangeListener = (state: VoicePlatformState) => void;
 type QueueUpdateListener = (event: QueueUpdatedEvent) => void;
 type SettingsUpdateListener = (event: PlaybackSettingsUpdatedEvent | GuildSettingsUpdatedEvent) => void;
 type LifecycleUpdateListener = (event: VoiceLifecycleUpdatedEvent) => void;
 type ErrorListener = (guildId: string, error: Error) => void;
+type PlaybackEventListener = (event: any) => void;
+
+interface GuildPlaybackSession {
+  sessionId: string;
+  currentEventId: string | null;
+  trackId: string | null;
+  startedAt: Date;
+  activePlaybackSeconds: number;
+  lastResumeTimestamp: number;
+  isPaused: boolean;
+}
 
 /**
  * Manages audio playback coordination, queue advancement, audio effects,
@@ -43,6 +56,7 @@ type ErrorListener = (guildId: string, error: Error) => void;
  * - Manages loop modes ('off' | 'track' | 'queue') with deterministic skip/clear semantics
  * - Manages voice channel inactivity timers via VoiceLifecycleManager
  * - Emits queue, settings, and lifecycle state update events for WebSocket / API
+ * - Records persistent playback history, active listening duration, and session metrics
  */
 export class PlaybackManager {
   private adapter: VoicePlatformAdapter | null = null;
@@ -55,6 +69,9 @@ export class PlaybackManager {
   private readonly guildFilters = new Map<string, AudioFilterConfig>();
   private readonly guildLoopModes = new Map<string, LoopMode>();
 
+  // Active playback sessions and event tracking
+  private readonly sessions = new Map<string, GuildPlaybackSession>();
+
   public readonly voiceLifecycleManager: VoiceLifecycleManager;
 
   private readonly stateListeners = new Set<StateChangeListener>();
@@ -62,12 +79,15 @@ export class PlaybackManager {
   private readonly settingsListeners = new Set<SettingsUpdateListener>();
   private readonly lifecycleListeners = new Set<LifecycleUpdateListener>();
   private readonly errorListeners = new Set<ErrorListener>();
+  private readonly playbackEventListeners = new Set<PlaybackEventListener>();
 
   constructor(
     private readonly logger: Logger,
     public readonly queueManager: QueueManager,
     defaultTimeoutSeconds: number = 300,
     public readonly guildSettingsManager?: GuildSettingsManager,
+    public readonly analyticsManager?: AnalyticsManager,
+    public readonly trackManager?: TrackManager,
   ) {
     this.logger.debug('PlaybackManager initialized');
 
@@ -191,6 +211,8 @@ export class PlaybackManager {
     if (adapter.onTrackEnd) {
       adapter.onTrackEnd(async (guildId) => {
         const reason = this.endReasons.get(guildId) || 'finished';
+        await this.finalizePlaybackEvent(guildId, reason);
+
         if (reason === 'finished') {
           this.logger.info({ guildId }, '[PLAYBACK] Track finished');
 
@@ -249,6 +271,9 @@ export class PlaybackManager {
   async leave(guildId: string): Promise<void> {
     const adapter = this.ensureAdapter();
     this.endReasons.set(guildId, 'stopped');
+    await this.finalizePlaybackEvent(guildId, 'stopped');
+    this.sessions.delete(guildId);
+
     await adapter.leaveVoice(guildId);
     this.voiceLifecycleManager.setBotConnected(guildId, false);
     this.voiceLifecycleManager.cleanup(guildId);
@@ -268,7 +293,15 @@ export class PlaybackManager {
       path: string;
       duration?: number;
       artist?: string | null;
+      album?: string | null;
+      thumbnailUrl?: string | null;
+      sourceProvider?: string;
+      sourceUrl?: string;
+      source?: string | null;
+      artwork?: string | null;
       addedBy?: string;
+      userId?: string;
+      trackId?: string;
     },
   ): Promise<{ status: 'started' | 'queued'; track: QueueTrack; position?: number }> {
     const adapter = this.ensureAdapter();
@@ -276,11 +309,19 @@ export class PlaybackManager {
 
     const track: QueueTrack = {
       id: randomUUID(),
+      trackId: metadata.trackId,
       name: metadata.name,
       path: metadata.path,
       duration: metadata.duration,
       artist: metadata.artist,
+      album: metadata.album,
+      thumbnailUrl: metadata.thumbnailUrl,
+      sourceProvider: metadata.sourceProvider,
+      sourceUrl: metadata.sourceUrl,
+      source: metadata.source,
+      artwork: metadata.artwork,
       addedBy: metadata.addedBy,
+      userId: metadata.userId,
     };
 
     // If already playing or paused, add to queue
@@ -303,6 +344,7 @@ export class PlaybackManager {
     );
 
     this.voiceLifecycleManager.handleTrackStarted(guildId);
+    await this.startPlaybackEvent(guildId, track);
 
     const playOptions: AdapterPlayOptions = {
       volume: this.getVolume(guildId),
@@ -331,6 +373,7 @@ export class PlaybackManager {
       );
 
       this.voiceLifecycleManager.handleTrackStarted(guildId);
+      await this.startPlaybackEvent(guildId, track);
 
       const playOptions: AdapterPlayOptions = {
         volume: this.getVolume(guildId),
@@ -340,6 +383,7 @@ export class PlaybackManager {
       await adapter.play(guildId, source, playOptions);
       this.emitQueueUpdate(guildId);
     } catch (err) {
+      await this.finalizePlaybackEvent(guildId, 'error');
       this.logger.error(
         { err, guildId, track: track.name },
         '[PLAYBACK] Track failed during loop: %s',
@@ -396,6 +440,7 @@ export class PlaybackManager {
           );
 
           this.voiceLifecycleManager.handleTrackStarted(guildId);
+          await this.startPlaybackEvent(guildId, nextTrack);
 
           const playOptions: AdapterPlayOptions = {
             volume: this.getVolume(guildId),
@@ -406,6 +451,7 @@ export class PlaybackManager {
           this.emitQueueUpdate(guildId);
           return true;
         } catch (err) {
+          await this.finalizePlaybackEvent(guildId, 'error');
           this.logger.error(
             { err, guildId, track: nextTrack.name },
             '[PLAYBACK] Track failed: %s',
@@ -442,6 +488,7 @@ export class PlaybackManager {
 
     // Stop current track cleanly with 'stopped' reason so its Idle event won't trigger duplicate advance
     this.endReasons.set(guildId, 'stopped');
+    await this.finalizePlaybackEvent(guildId, 'skipped');
     adapter.stop(guildId);
 
     // Dequeue next track directly (breaks track loop repetition)
@@ -473,6 +520,7 @@ export class PlaybackManager {
       );
 
       this.voiceLifecycleManager.handleTrackStarted(guildId);
+      await this.startPlaybackEvent(guildId, nextTrack);
 
       const playOptions: AdapterPlayOptions = {
         volume: this.getVolume(guildId),
@@ -483,6 +531,7 @@ export class PlaybackManager {
       this.emitQueueUpdate(guildId);
       return { skipped: true, nowPlaying: nextTrack };
     } catch (err) {
+      await this.finalizePlaybackEvent(guildId, 'error');
       this.logger.error(
         { err, guildId, track: nextTrack.name },
         '[PLAYBACK] Track failed: %s',
@@ -496,17 +545,36 @@ export class PlaybackManager {
 
   pause(guildId: string): boolean {
     const adapter = this.ensureAdapter();
-    return adapter.pause(guildId);
+    const paused = adapter.pause(guildId);
+    if (paused) {
+      const session = this.sessions.get(guildId);
+      if (session && !session.isPaused) {
+        session.activePlaybackSeconds += (Date.now() - session.lastResumeTimestamp) / 1000;
+        session.isPaused = true;
+      }
+    }
+    return paused;
   }
 
   resume(guildId: string): boolean {
     const adapter = this.ensureAdapter();
-    return adapter.resume(guildId);
+    const resumed = adapter.resume(guildId);
+    if (resumed) {
+      const session = this.sessions.get(guildId);
+      if (session && session.isPaused) {
+        session.lastResumeTimestamp = Date.now();
+        session.isPaused = false;
+      }
+    }
+    return resumed;
   }
 
   stop(guildId: string): boolean {
     const adapter = this.ensureAdapter();
     this.endReasons.set(guildId, 'stopped');
+    this.finalizePlaybackEvent(guildId, 'stopped').catch((err) => {
+      this.logger.error({ err, guildId }, 'Error finalizing playback event on stop');
+    });
     const stopped = adapter.stop(guildId);
     this.currentTracks.set(guildId, null);
     this.emitQueueUpdate(guildId);
@@ -870,6 +938,180 @@ export class PlaybackManager {
         listener(event);
       } catch (err) {
         this.logger.error({ err, guildId }, 'Error in lifecycle update listener');
+      }
+    }
+  }
+
+  // ── Session & Analytics Event Helpers ──────────────────────────────
+
+  /**
+   * Get or initialize the lightweight session ID for a guild.
+   */
+  public getOrCreateSessionId(guildId: string): string {
+    let session = this.sessions.get(guildId);
+    if (!session) {
+      const sessionId = 'session_' + randomUUID();
+      session = {
+        sessionId,
+        currentEventId: null,
+        trackId: null,
+        startedAt: new Date(),
+        activePlaybackSeconds: 0,
+        lastResumeTimestamp: Date.now(),
+        isPaused: false,
+      };
+      this.sessions.set(guildId, session);
+    }
+    return session.sessionId;
+  }
+
+  /**
+   * Ensure track has a persistent PostgreSQL ID via TrackManager if available.
+   */
+  private async ensureTrackPersisted(track: QueueTrack): Promise<string> {
+    if (track.trackId) return track.trackId;
+    if (this.trackManager) {
+      try {
+        const saved = await this.trackManager.saveTrackWithSource(
+          {
+            title: track.name,
+            artist: track.artist,
+            album: track.album,
+            duration: track.duration,
+            thumbnailUrl: track.thumbnailUrl,
+          },
+          {
+            provider: track.sourceProvider || 'local',
+            sourceType: track.path.startsWith('http') ? 'stream' : 'file',
+            sourceUrl: track.sourceUrl || track.path,
+          },
+        );
+        track.trackId = saved.track.id;
+        return saved.track.id;
+      } catch (err) {
+        this.logger.warn({ err, track: track.name }, 'Could not persist track metadata to database');
+      }
+    }
+    const fallbackId = randomUUID();
+    track.trackId = fallbackId;
+    return fallbackId;
+  }
+
+  /**
+   * Start a logical playback event for history and analytics.
+   */
+  private async startPlaybackEvent(guildId: string, track: QueueTrack): Promise<void> {
+    // Finalize any dangling unfinalized event for this guild
+    await this.finalizePlaybackEvent(guildId, 'stopped');
+
+    const sessionId = this.getOrCreateSessionId(guildId);
+    const persistentTrackId = await this.ensureTrackPersisted(track);
+    const eventId = randomUUID();
+    const now = new Date();
+
+    this.sessions.set(guildId, {
+      sessionId,
+      currentEventId: eventId,
+      trackId: persistentTrackId,
+      startedAt: now,
+      activePlaybackSeconds: 0,
+      lastResumeTimestamp: Date.now(),
+      isPaused: false,
+    });
+
+    if (this.analyticsManager) {
+      try {
+        await this.analyticsManager.recordPlaybackStart({
+          eventId,
+          guildId,
+          trackId: persistentTrackId,
+          userId: track.userId,
+          source: track.sourceProvider || track.source,
+          trackDuration: track.duration,
+          sessionId,
+          startedAt: now,
+        });
+      } catch (err) {
+        this.logger.error({ err, eventId }, 'Failed to record playback start in AnalyticsManager');
+      }
+    }
+
+    this.emitPlaybackEvent({
+      type: 'playback.started',
+      guildId,
+      eventId,
+      trackId: persistentTrackId,
+      sessionId,
+      title: track.name,
+    });
+  }
+
+  /**
+   * Finalize a playback event with accurate duration listened (excluding paused time).
+   */
+  private async finalizePlaybackEvent(guildId: string, endReason: PlaybackEndReason): Promise<void> {
+    const session = this.sessions.get(guildId);
+    if (!session || !session.currentEventId) return;
+
+    if (!session.isPaused) {
+      session.activePlaybackSeconds += (Date.now() - session.lastResumeTimestamp) / 1000;
+    }
+
+    const durationListened = Math.max(0, Math.round(session.activePlaybackSeconds));
+    const completed = endReason === 'finished';
+    const eventId = session.currentEventId;
+    const trackId = session.trackId;
+    session.currentEventId = null;
+
+    if (this.analyticsManager) {
+      try {
+        await this.analyticsManager.recordPlaybackEnd(eventId, {
+          endedAt: new Date(),
+          durationListened,
+          completed,
+          endReason,
+        });
+      } catch (err) {
+        this.logger.error({ err, eventId }, 'Failed to finalize playback event in AnalyticsManager');
+      }
+    }
+
+    this.emitPlaybackEvent({
+      type: 'playback.ended',
+      guildId,
+      eventId,
+      trackId,
+      endReason,
+      completed,
+      durationListened,
+    });
+  }
+
+  onPlaybackEvent(listener: PlaybackEventListener): () => void {
+    this.playbackEventListeners.add(listener);
+    return () => {
+      this.playbackEventListeners.delete(listener);
+    };
+  }
+
+  private emitPlaybackEvent(event: any): void {
+    for (const listener of this.playbackEventListeners) {
+      try {
+        listener(event);
+      } catch (err) {
+        this.logger.error({ err }, 'Error in playback event listener');
+      }
+    }
+  }
+
+  /**
+   * Perform graceful shutdown of active playback sessions and queues.
+   */
+  async shutdown(): Promise<void> {
+    this.logger.info('[PLAYBACK] Shutting down PlaybackManager, finalizing active events');
+    for (const [guildId, session] of this.sessions) {
+      if (session.currentEventId) {
+        await this.finalizePlaybackEvent(guildId, 'stopped');
       }
     }
   }

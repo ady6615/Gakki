@@ -1,5 +1,12 @@
 import { Client, GatewayIntentBits } from 'discord.js';
-import type { AudioPlayerManager, PlaybackManager, AudioSourceManager } from '@gakki/core';
+import type {
+  AudioPlayerManager,
+  PlaybackManager,
+  AudioSourceManager,
+  AnalyticsManager,
+  PlaylistManager,
+  TrackManager,
+} from '@gakki/core';
 import { createLogger } from '@gakki/core';
 import {
   slashCommandDefinitions,
@@ -21,12 +28,18 @@ let client: Client | null = null;
  * @param token - Discord bot token
  * @param playbackManager - Optional PlaybackManager or AudioPlayerManager for handling voice commands
  * @param audioSourceManager - Optional AudioSourceManager for resolving internet and local sources
+ * @param analyticsManager - Optional AnalyticsManager for playback history and metrics
+ * @param playlistManager - Optional PlaylistManager for saved playlists
+ * @param trackManager - Optional TrackManager for persistent tracks
  * @returns The connected Discord.js Client
  */
 export async function createDiscordBot(
   token: string,
   playbackManager?: PlaybackManager | AudioPlayerManager,
   audioSourceManager?: AudioSourceManager,
+  analyticsManager?: AnalyticsManager,
+  playlistManager?: PlaylistManager,
+  trackManager?: TrackManager,
 ): Promise<Client> {
   client = new Client({
     intents: [
@@ -79,9 +92,16 @@ export async function createDiscordBot(
 
     try {
       if (interaction.isAutocomplete()) {
-        await handleAutocomplete(interaction);
+        await handleAutocomplete(interaction, playlistManager);
       } else if (interaction.isChatInputCommand()) {
-        await handleChatInputCommand(interaction, activeManager, audioSourceManager);
+        await handleChatInputCommand(
+          interaction,
+          activeManager,
+          audioSourceManager,
+          analyticsManager,
+          playlistManager,
+          trackManager,
+        );
       }
     } catch (err) {
       logger.error({ err }, '[ERROR] Unhandled error during interaction');

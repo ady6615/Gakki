@@ -244,8 +244,16 @@ export function createWebSocketServer(
     activePlaybackManager.onVoiceLifecycleUpdate((event) => {
       broadcastVoiceLifecycleUpdated(event);
     });
+
+    activePlaybackManager.onPlaybackEvent((event) => {
+      broadcastEvent(event);
+    });
   }
 
   logger.info('WebSocket server attached at /ws');
   return wss;
+}
+
+export function broadcastPlaylistEvent(event: { type: string; [key: string]: any }): void {
+  broadcastEvent(event);
 }

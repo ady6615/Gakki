@@ -1,10 +1,19 @@
 import { Router } from 'express';
-import type { AudioPlayerManager, PlaybackManager, AudioSourceManager } from '@gakki/core';
+import type {
+  AudioPlayerManager,
+  PlaybackManager,
+  AudioSourceManager,
+  AnalyticsManager,
+  PlaylistManager,
+  TrackManager,
+} from '@gakki/core';
 import { healthRoutes } from './health.routes';
 import { playbackRoutes } from './playback.routes';
 import { queueRoutes } from './queue.routes';
 import { artworkRoutes } from './artwork.routes';
 import { sourceRoutes } from './source.routes';
+import { historyRoutes } from './history.routes';
+import { playlistRoutes } from './playlist.routes';
 import { ArtworkService } from '../../services/artwork.service';
 
 /**
@@ -15,6 +24,9 @@ export function createRoutes(
   manager?: PlaybackManager | AudioPlayerManager,
   audioSourceManager?: AudioSourceManager,
   artworkService?: ArtworkService,
+  analyticsManager?: AnalyticsManager,
+  playlistManager?: PlaylistManager,
+  trackManager?: TrackManager,
 ): Router {
   const router = Router();
 
@@ -28,6 +40,11 @@ export function createRoutes(
   router.use('/queue', queueRoutes(activePlaybackManager));
   router.use('/artwork', artworkRoutes(artworkService));
   router.use('/sources', sourceRoutes(audioSourceManager));
+  router.use('/history', historyRoutes(analyticsManager));
+  router.use(
+    '/playlists',
+    playlistRoutes(playlistManager, activePlaybackManager, audioSourceManager, trackManager),
+  );
 
   return router;
 }

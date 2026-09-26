@@ -8,6 +8,8 @@ import {
   PlaybackManager,
   GuildSettingsManager,
   TrackManager,
+  AnalyticsManager,
+  PlaylistManager,
 } from '@gakki/core';
 import { createApiServer } from './api/server';
 import { createDiscordBot, DiscordVoiceAdapter } from './discord';
@@ -18,7 +20,7 @@ import { createConfiguredAudioSourceManager } from './sources';
 const logger = createLogger('main');
 
 async function main(): Promise<void> {
-  logger.info('Starting Gakki Music Platform — Phase 4 (Voice Lifecycle, Audio Effects & Queue Manipulation)...');
+  logger.info('Starting Gakki Music Platform — Phase 6 (Play History, Persistent Playlists & Session Analytics)...');
 
   // ── Configuration ──────────────────────────────────────────────
   const config = loadConfig();
@@ -34,11 +36,16 @@ async function main(): Promise<void> {
     logger.error({ err: error }, 'Failed to connect to database — continuing without database');
   }
 
-  // ── Persistent Metadata & Source Services ───────────────────────
+  // ── Persistent Metadata & Analytics Services ────────────────────
   const guildSettingsManager = new GuildSettingsManager(dbClient, {
     defaultIdleTimeoutSeconds: config.VOICE_IDLE_TIMEOUT_SECONDS,
   });
   const trackManager = new TrackManager(dbClient);
+  const analyticsLogger = createLogger('analytics-manager');
+  const analyticsManager = new AnalyticsManager(dbClient, analyticsLogger);
+  const playlistLogger = createLogger('playlist-manager');
+  const playlistManager = new PlaylistManager(dbClient, playlistLogger);
+
   const artworkService = new ArtworkService();
   const audioSourceManager = createConfiguredAudioSourceManager(artworkService, trackManager);
 
@@ -52,20 +59,38 @@ async function main(): Promise<void> {
     queueManager,
     config.VOICE_IDLE_TIMEOUT_SECONDS,
     guildSettingsManager,
+    analyticsManager,
+    trackManager,
   );
 
   // ── API Server ─────────────────────────────────────────────────
-  const { server } = createApiServer(config.API_PORT, playbackManager, audioSourceManager, artworkService);
+  const { server } = createApiServer(
+    config.API_PORT,
+    playbackManager,
+    audioSourceManager,
+    artworkService,
+    analyticsManager,
+    playlistManager,
+    trackManager,
+  );
 
   // ── WebSocket ──────────────────────────────────────────────────
   createWebSocketServer(server, playbackManager);
 
   // ── Discord Bot & Voice Adapter ────────────────────────────────
   let discordConnected = false;
+  let discordClient: any = null;
   if (config.DISCORD_TOKEN) {
     try {
-      const client = await createDiscordBot(config.DISCORD_TOKEN, playbackManager, audioSourceManager);
-      const voiceAdapter = new DiscordVoiceAdapter(client);
+      discordClient = await createDiscordBot(
+        config.DISCORD_TOKEN,
+        playbackManager,
+        audioSourceManager,
+        analyticsManager,
+        playlistManager,
+        trackManager,
+      );
+      const voiceAdapter = new DiscordVoiceAdapter(discordClient);
       playbackManager.registerAdapter(voiceAdapter);
       discordConnected = true;
     } catch (error) {
@@ -83,19 +108,40 @@ async function main(): Promise<void> {
       api: `http://localhost:${config.API_PORT}`,
       ws: `ws://localhost:${config.API_PORT}/ws`,
     },
-    'Gakki Phase 5 (Internet Sources, Streaming & Persistent Metadata) startup complete',
+    'Gakki Phase 6 startup complete',
   );
 
   // ── Graceful Shutdown ─────────────────────────────────────────
-  const shutdown = async (): Promise<void> => {
-    logger.info('Shutting down...');
-    server.close();
-    await disconnectDatabase();
-    process.exit(0);
+  let isShuttingDown = false;
+  const shutdown = async (signal: string): Promise<void> => {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+    logger.info({ signal }, 'Graceful shutdown initiated...');
+
+    try {
+      // 1. Finalize active playback events
+      await playbackManager.shutdown();
+
+      // 2. Close HTTP/API and WebSocket server
+      server.close();
+
+      // 3. Close Discord bot connection
+      if (discordClient) {
+        discordClient.destroy();
+      }
+
+      // 4. Close database pool
+      await disconnectDatabase();
+      logger.info('Graceful shutdown completed successfully');
+    } catch (err) {
+      logger.error({ err }, 'Error during graceful shutdown');
+    } finally {
+      process.exit(0);
+    }
   };
 
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
 }
 
 main().catch((error) => {
