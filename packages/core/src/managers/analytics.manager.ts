@@ -15,6 +15,8 @@ export interface PlaybackStartParams {
   trackDuration?: number | null;
   sessionId?: string | null;
   startedAt?: Date;
+  trackTitle?: string | null;
+  artist?: string | null;
 }
 
 export interface PlaybackEndParams {
@@ -77,18 +79,29 @@ export interface GuildAnalytics {
   }>;
 }
 
+import { TrackManager } from './track.manager';
+
 /**
  * Manages persistent playback events, history queries, and SQL-aggregated analytics.
  */
 export class AnalyticsManager {
   // In-memory fallback event cache for tests or when DB is unavailable
-  private readonly inMemoryEvents = new Map<string, any>();
+  private static readonly sharedEvents = new Map<string, any>();
+
+  private get inMemoryEvents() {
+    return AnalyticsManager.sharedEvents;
+  }
 
   constructor(
     private readonly db: DatabaseClient | null,
     private readonly logger: Logger,
+    private trackManager?: TrackManager | null,
   ) {
     this.logger.debug('AnalyticsManager initialized');
+  }
+
+  setTrackManager(trackManager: TrackManager): void {
+    this.trackManager = trackManager;
   }
 
   /**
@@ -100,6 +113,24 @@ export class AnalyticsManager {
     const startedAt = params.startedAt || new Date();
 
     if (!this.db) {
+      let trackTitle = params.trackTitle ?? null;
+      let artist = params.artist ?? null;
+      if (!trackTitle || !artist) {
+        if (this.trackManager) {
+          const found = await this.trackManager.getTrackById(params.trackId);
+          if (found) {
+            trackTitle = trackTitle || found.title;
+            artist = artist || found.artist;
+          }
+        } else {
+          const found = TrackManager.getSharedTrackById(params.trackId);
+          if (found) {
+            trackTitle = trackTitle || found.title;
+            artist = artist || found.artist;
+          }
+        }
+      }
+
       this.inMemoryEvents.set(eventId, {
         id: eventId,
         guildId: params.guildId,
@@ -114,6 +145,8 @@ export class AnalyticsManager {
         source: params.source ?? null,
         sessionId: params.sessionId ?? null,
         createdAt: startedAt,
+        trackTitle,
+        artist,
       });
       return eventId;
     }
@@ -211,8 +244,8 @@ export class AnalyticsManager {
           ...e,
           track: {
             id: e.trackId,
-            title: 'Track ' + e.trackId,
-            artist: null,
+            title: e.trackTitle || ('Track ' + e.trackId),
+            artist: e.artist ?? null,
             album: null,
             coverArt: null,
           },
@@ -295,7 +328,25 @@ export class AnalyticsManager {
     const offset = Math.max(0, options.offset ?? 0);
 
     if (!this.db) {
-      return { events: [], total: 0 };
+      let filtered = Array.from(this.inMemoryEvents.values())
+        .filter((e) => e.userId === userId);
+      if (options.guildId) {
+        filtered = filtered.filter((e) => e.guildId === options.guildId);
+      }
+      const events: PlaybackHistoryItem[] = filtered
+        .sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime())
+        .slice(offset, offset + limit)
+        .map((e) => ({
+          ...e,
+          track: {
+            id: e.trackId,
+            title: e.trackTitle || ('Track ' + e.trackId),
+            artist: e.artist ?? null,
+            album: null,
+            coverArt: null,
+          },
+        }));
+      return { events, total: filtered.length };
     }
 
     try {
@@ -364,7 +415,34 @@ export class AnalyticsManager {
     const clampedLimit = Math.min(25, Math.max(1, limit));
 
     if (!this.db) {
-      return [];
+      const seen = new Set<string>();
+      const results: Array<{
+        trackId: string;
+        title: string;
+        artist: string | null;
+        lastPlayedAt: Date;
+        endReason: string | null;
+        durationListened: number;
+      }> = [];
+      const events = Array.from(this.inMemoryEvents.values())
+        .filter((e) => e.guildId === guildId)
+        .sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime());
+
+      for (const e of events) {
+        if (!seen.has(e.trackId)) {
+          seen.add(e.trackId);
+          results.push({
+            trackId: e.trackId,
+            title: e.trackTitle || ('Track ' + e.trackId),
+            artist: e.artist ?? null,
+            lastPlayedAt: e.startedAt,
+            endReason: e.endReason,
+            durationListened: e.durationListened,
+          });
+          if (results.length >= clampedLimit) break;
+        }
+      }
+      return results;
     }
 
     try {
@@ -414,13 +492,19 @@ export class AnalyticsManager {
    */
   async getTrackStatistics(trackId: string): Promise<TrackStatistics> {
     if (!this.db) {
+      const events = Array.from(this.inMemoryEvents.values()).filter((e) => e.trackId === trackId);
+      const playCount = events.length;
+      const completionCount = events.filter((e) => e.completed).length;
+      const skipCount = events.filter((e) => e.endReason === 'skipped').length;
+      const totalListeningTime = events.reduce((sum, e) => sum + (e.durationListened || 0), 0);
+      const uniqueListeners = new Set(events.map((e) => e.userId).filter(Boolean)).size;
       return {
         trackId,
-        playCount: 0,
-        completionCount: 0,
-        skipCount: 0,
-        totalListeningTime: 0,
-        uniqueListeners: 0,
+        playCount,
+        completionCount,
+        skipCount,
+        totalListeningTime,
+        uniqueListeners,
       };
     }
 
@@ -470,16 +554,57 @@ export class AnalyticsManager {
    */
   async getGuildAnalytics(guildId: string): Promise<GuildAnalytics> {
     if (!this.db) {
+      const events = Array.from(this.inMemoryEvents.values()).filter((e) => e.guildId === guildId);
+      const totalTracksPlayed = events.length;
+      const totalListeningTime = events.reduce((sum, e) => sum + (e.durationListened || 0), 0);
+      const completedPlays = events.filter((e) => e.completed).length;
+      const skippedPlays = events.filter((e) => e.endReason === 'skipped').length;
+      const completionRate = totalTracksPlayed > 0 ? Math.round((completedPlays / totalTracksPlayed) * 1000) / 1000 : 0;
+      const skipRate = totalTracksPlayed > 0 ? Math.round((skippedPlays / totalTracksPlayed) * 1000) / 1000 : 0;
+      const uniqueUsers = new Set(events.map((e) => e.userId).filter(Boolean)).size;
+      const uniqueTracks = new Set(events.map((e) => e.trackId)).size;
+
+      // Top tracks
+      const trackMap = new Map<string, { trackId: string; title: string; artist: string | null; playCount: number; totalListeningTime: number }>();
+      for (const e of events) {
+        const existing = trackMap.get(e.trackId) || {
+          trackId: e.trackId,
+          title: e.trackTitle || ('Track ' + e.trackId),
+          artist: e.artist ?? null,
+          playCount: 0,
+          totalListeningTime: 0,
+        };
+        existing.playCount++;
+        existing.totalListeningTime += (e.durationListened || 0);
+        trackMap.set(e.trackId, existing);
+      }
+      const topTracks = Array.from(trackMap.values()).sort((a, b) => b.playCount - a.playCount).slice(0, 5);
+
+      // Top artists
+      const artistMap = new Map<string, { artist: string; playCount: number; totalListeningTime: number }>();
+      for (const e of events) {
+        if (!e.artist) continue;
+        const existing = artistMap.get(e.artist) || {
+          artist: e.artist,
+          playCount: 0,
+          totalListeningTime: 0,
+        };
+        existing.playCount++;
+        existing.totalListeningTime += (e.durationListened || 0);
+        artistMap.set(e.artist, existing);
+      }
+      const topArtists = Array.from(artistMap.values()).sort((a, b) => b.playCount - a.playCount).slice(0, 5);
+
       return {
         guildId,
-        totalTracksPlayed: 0,
-        totalListeningTime: 0,
-        completionRate: 0,
-        skipRate: 0,
-        uniqueUsers: 0,
-        uniqueTracks: 0,
-        topTracks: [],
-        topArtists: [],
+        totalTracksPlayed,
+        totalListeningTime,
+        completionRate,
+        skipRate,
+        uniqueUsers,
+        uniqueTracks,
+        topTracks,
+        topArtists,
       };
     }
 

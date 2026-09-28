@@ -96,3 +96,31 @@ export const playbackEvents = pgTable('playback_events', {
   sessionId: varchar('session_id', { length: 100 }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
+
+/** Track acoustic features & embeddings for smart recommendations */
+export const trackFeatures = pgTable('track_features', {
+  trackId: uuid('track_id')
+    .primaryKey()
+    .references(() => tracks.id, { onDelete: 'cascade' }),
+  featureVersion: integer('feature_version').notNull().default(1),
+  bpm: real('bpm'),
+  tempoConfidence: real('tempo_confidence'),
+  energy: real('energy'), // normalized acoustic energy [0, 1]
+  key: varchar('key', { length: 20 }),
+  spectralCentroid: real('spectral_centroid'),
+  spectralBandwidth: real('spectral_bandwidth'),
+  spectralContrast: real('spectral_contrast'),
+  spectralRolloff: real('spectral_rolloff'),
+  spectralFlatness: real('spectral_flatness'),
+  zeroCrossingRate: real('zero_crossing_rate'),
+  chroma: text('chroma'), // JSON string array of 12 chroma values
+  mfcc: text('mfcc'), // JSON string array of 13 MFCC values
+  rhythmFeatures: text('rhythm_features'), // JSON string of rhythm features
+  embedding: text('embedding'), // JSON string of 32-dim normalized vector
+  analysisStatus: varchar('analysis_status', { length: 32 }).notNull().default('PENDING'), // PENDING | PROCESSING | READY | FAILED
+  contentHash: varchar('content_hash', { length: 64 }),
+  analyzedAt: timestamp('analyzed_at', { withTimezone: true }),
+  errorMessage: text('error_message'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});

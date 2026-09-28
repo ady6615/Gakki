@@ -10,17 +10,19 @@ import {
   TrackManager,
   AnalyticsManager,
   PlaylistManager,
+  AiRecommendationManager,
 } from '@gakki/core';
 import { createApiServer } from './api/server';
 import { createDiscordBot, DiscordVoiceAdapter } from './discord';
-import { createWebSocketServer } from './websocket';
+import { createWebSocketServer, broadcastEvent } from './websocket';
 import { ArtworkService } from './services/artwork.service';
 import { createConfiguredAudioSourceManager } from './sources';
+import { AudioAnalysisClient } from './services/audio-analysis.client';
 
 const logger = createLogger('main');
 
 async function main(): Promise<void> {
-  logger.info('Starting Gakki Music Platform — Phase 6 (Play History, Persistent Playlists & Session Analytics)...');
+  logger.info('Starting Gakki Music Platform — Phase 7 (Audio Analysis, Smart Recommendations & Dynamic DJ)...');
 
   // ── Configuration ──────────────────────────────────────────────
   const config = loadConfig();
@@ -46,6 +48,34 @@ async function main(): Promise<void> {
   const playlistLogger = createLogger('playlist-manager');
   const playlistManager = new PlaylistManager(dbClient, playlistLogger);
 
+  // ── Phase 7: AI Recommendation & Dynamic DJ Manager ─────────────
+  const recLogger = createLogger('ai-recommendation');
+  const recManager = new AiRecommendationManager(
+    dbClient,
+    trackManager,
+    analyticsManager,
+    playlistManager,
+    { recentCooldownCount: config.RECOMMENDATION_RECENT_TRACK_COOLDOWN },
+    recLogger,
+  );
+
+  // ── Phase 7: Python Audio Analysis Client ───────────────────────
+  const analysisClient = new AudioAnalysisClient(recManager.featureManager, {
+    serviceUrl: config.AUDIO_ANALYZER_URL,
+    maxConcurrency: 2,
+    jobTimeoutMs: 30000,
+  });
+
+  // Automatically trigger asynchronous background audio analysis when new tracks enter library
+  trackManager.onTrackSaved((savedTrack, source) => {
+    if (source && source.sourceUrl) {
+      analysisClient.queueAnalysis({
+        trackId: savedTrack.id,
+        filePath: source.sourceUrl,
+      });
+    }
+  });
+
   const artworkService = new ArtworkService();
   const audioSourceManager = createConfiguredAudioSourceManager(artworkService, trackManager);
 
@@ -63,6 +93,71 @@ async function main(): Promise<void> {
     trackManager,
   );
 
+  // ── Dynamic DJ Auto-Selection on Track End ──────────────────────
+  playbackManager.onPlaybackEvent(async (event) => {
+    if (event.type === 'playback.ended') {
+      const { guildId, trackId } = event;
+      if (!guildId || !trackId) return;
+
+      // Update cooldown history & energy tracking in DJ manager
+      const features = await recManager.featureManager.getFeatures(trackId);
+      recManager.djManager.recordPlayedTrack(guildId, trackId, features);
+
+      // If DJ Mode is ON for this guild, check if queue has ended
+      const djState = recManager.getDJState(guildId);
+      if (djState.enabled && playbackManager.queueManager.isEmpty(guildId)) {
+        logger.info({ guildId }, '[DJ] Queue empty with Dynamic DJ active — selecting next track');
+        try {
+          const candidate = await recManager.selectNextTrack({
+            guildId,
+            seedTrackId: trackId,
+          });
+
+          if (candidate) {
+            const nextTrack = await trackManager.getTrackById(candidate.trackId);
+            if (nextTrack) {
+              const primarySource = await trackManager.getPrimarySourceByTrackId(nextTrack.id);
+              const trackPath = primarySource ? primarySource.sourceUrl : '';
+              if (trackPath) {
+                const source = playbackManager.createAudioSource({
+                  id: nextTrack.id,
+                  trackId: nextTrack.id,
+                  name: nextTrack.title,
+                  path: trackPath,
+                  duration: nextTrack.duration ?? undefined,
+                  artist: nextTrack.artist,
+                  album: nextTrack.album,
+                } as any);
+
+                await playbackManager.play(guildId, source, {
+                  trackId: nextTrack.id,
+                  name: nextTrack.title,
+                  path: trackPath,
+                  duration: nextTrack.duration ?? undefined,
+                  artist: nextTrack.artist,
+                  album: nextTrack.album,
+                  addedBy: 'Dynamic DJ',
+                });
+
+                broadcastEvent({
+                  type: 'dj.next.selected',
+                  guildId,
+                  trackId: nextTrack.id,
+                  title: nextTrack.title,
+                  reasons: candidate.reasons,
+                  explanation: candidate.explanation,
+                  finalScore: candidate.finalScore,
+                });
+              }
+            }
+          }
+        } catch (djErr) {
+          logger.error({ err: djErr, guildId }, '[DJ] Error auto-selecting next track');
+        }
+      }
+    }
+  });
+
   // ── API Server ─────────────────────────────────────────────────
   const { server } = createApiServer(
     config.API_PORT,
@@ -72,6 +167,7 @@ async function main(): Promise<void> {
     analyticsManager,
     playlistManager,
     trackManager,
+    recManager,
   );
 
   // ── WebSocket ──────────────────────────────────────────────────
@@ -89,6 +185,7 @@ async function main(): Promise<void> {
         analyticsManager,
         playlistManager,
         trackManager,
+        recManager,
       );
       const voiceAdapter = new DiscordVoiceAdapter(discordClient);
       playbackManager.registerAdapter(voiceAdapter);
@@ -107,8 +204,9 @@ async function main(): Promise<void> {
       discord: discordConnected ? 'connected' : 'disconnected',
       api: `http://localhost:${config.API_PORT}`,
       ws: `ws://localhost:${config.API_PORT}/ws`,
+      analyzer: config.AUDIO_ANALYZER_URL,
     },
-    'Gakki Phase 6 startup complete',
+    'Gakki Phase 7 startup complete',
   );
 
   // ── Graceful Shutdown ─────────────────────────────────────────

@@ -207,8 +207,8 @@ async function runPhase6Tests(): Promise<void> {
   }
 
   const trackManager = new TrackManager(db);
-  const analyticsManager = new AnalyticsManager(db, logger);
-  const playlistManager = new PlaylistManager(db, logger);
+  const analyticsManager = new AnalyticsManager(db, logger, trackManager);
+  const playlistManager = new PlaylistManager(db, logger, trackManager);
   const artworkService = new ArtworkService();
   const audioSourceManager = createConfiguredAudioSourceManager(artworkService, trackManager);
 

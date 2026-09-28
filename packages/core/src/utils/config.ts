@@ -53,6 +53,10 @@ const configSchema = z.object({
   // Voice Lifecycle
   VOICE_IDLE_TIMEOUT_SECONDS: z.coerce.number().int().nonnegative().default(300),
 
+  // Phase 7: Audio Analysis & Recommendations
+  AUDIO_ANALYZER_URL: z.string().default('http://127.0.0.1:5050'),
+  RECOMMENDATION_RECENT_TRACK_COOLDOWN: z.coerce.number().int().nonnegative().default(10),
+
   // Logging
   LOG_LEVEL: z
     .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace'])

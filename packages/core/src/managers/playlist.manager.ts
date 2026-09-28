@@ -10,6 +10,7 @@ import type {
   UpdatePlaylistInput,
   PlaylistVisibility,
 } from '../types/playlist';
+import { TrackManager } from './track.manager';
 
 export class PlaylistNotFoundError extends Error {
   constructor(identifier: string) {
@@ -29,15 +30,28 @@ export class PlaylistPermissionError extends Error {
  * Manages persistent playlists and ordered playlist tracks in PostgreSQL.
  */
 export class PlaylistManager {
-  // In-memory fallback stores
-  private readonly inMemoryPlaylists = new Map<string, Playlist>();
-  private readonly inMemoryTracks = new Map<string, PlaylistTrack[]>();
+  // In-memory fallback stores shared across instances in process
+  private static readonly sharedPlaylists = new Map<string, Playlist>();
+  private static readonly sharedTracks = new Map<string, PlaylistTrack[]>();
+
+  private get inMemoryPlaylists() {
+    return PlaylistManager.sharedPlaylists;
+  }
+
+  private get inMemoryTracks() {
+    return PlaylistManager.sharedTracks;
+  }
 
   constructor(
     private readonly db: DatabaseClient | null,
     private readonly logger: Logger,
+    private trackManager?: TrackManager | null,
   ) {
     this.logger.debug('PlaylistManager initialized');
+  }
+
+  setTrackManager(trackManager: TrackManager): void {
+    this.trackManager = trackManager;
   }
 
   /**
@@ -349,6 +363,60 @@ export class PlaylistManager {
     if (!this.db) {
       const tracks = this.inMemoryTracks.get(playlistId) || [];
       const nextPosition = tracks.length + 1;
+      let trackObj = {
+        id: trackId,
+        title: 'Track ' + trackId,
+        artist: null as string | null,
+        album: null as string | null,
+        duration: null as number | null,
+        coverArt: null as string | null,
+      };
+
+      let sourceObj: any = null;
+      if (this.trackManager) {
+        const found = await this.trackManager.getTrackById(trackId);
+        if (found) {
+          trackObj = {
+            id: found.id,
+            title: found.title,
+            artist: found.artist,
+            album: found.album,
+            duration: found.duration,
+            coverArt: found.coverArt,
+          };
+        }
+        const src = await this.trackManager.getPrimarySourceByTrackId(trackId);
+        if (src) {
+          sourceObj = {
+            provider: src.provider,
+            sourceType: src.sourceType,
+            sourceUrl: src.sourceUrl,
+            externalId: src.externalId,
+          };
+        }
+      } else {
+        const found = TrackManager.getSharedTrackById(trackId);
+        if (found) {
+          trackObj = {
+            id: found.id,
+            title: found.title,
+            artist: found.artist,
+            album: found.album,
+            duration: found.duration,
+            coverArt: found.coverArt,
+          };
+        }
+        const src = TrackManager.getSharedSourceByTrackId(trackId);
+        if (src) {
+          sourceObj = {
+            provider: src.provider,
+            sourceType: src.sourceType,
+            sourceUrl: src.sourceUrl,
+            externalId: src.externalId,
+          };
+        }
+      }
+
       const pt: PlaylistTrack = {
         id,
         playlistId,
@@ -356,14 +424,8 @@ export class PlaylistManager {
         position: nextPosition,
         addedBy: addedBy ?? null,
         addedAt: now.toISOString(),
-        track: {
-          id: trackId,
-          title: 'Track ' + trackId,
-          artist: null,
-          album: null,
-          duration: null,
-          coverArt: null,
-        },
+        track: trackObj,
+        source: sourceObj,
       };
       tracks.push(pt);
       this.inMemoryTracks.set(playlistId, tracks);

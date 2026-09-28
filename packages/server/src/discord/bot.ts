@@ -6,6 +6,7 @@ import type {
   AnalyticsManager,
   PlaylistManager,
   TrackManager,
+  AiRecommendationManager,
 } from '@gakki/core';
 import { createLogger } from '@gakki/core';
 import {
@@ -40,6 +41,7 @@ export async function createDiscordBot(
   analyticsManager?: AnalyticsManager,
   playlistManager?: PlaylistManager,
   trackManager?: TrackManager,
+  recManager?: AiRecommendationManager,
 ): Promise<Client> {
   client = new Client({
     intents: [
@@ -101,6 +103,7 @@ export async function createDiscordBot(
           analyticsManager,
           playlistManager,
           trackManager,
+          recManager,
         );
       }
     } catch (err) {

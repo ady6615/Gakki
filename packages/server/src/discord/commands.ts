@@ -16,6 +16,8 @@ import type {
   AnalyticsManager,
   PlaylistManager,
   TrackManager,
+  AiRecommendationManager,
+  DJProfile,
 } from '@gakki/core';
 import {
   LocalAudioSource,
@@ -337,9 +339,81 @@ export const slashCommandDefinitions = [
         .setName('mode')
         .setDescription('Turn stay-in-channel mode on or off')
         .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName('vibe')
+    .setDescription('Generate a Same Vibe recommendation playlist based on audio similarity')
+    .addStringOption((option) =>
+      option
+        .setName('track')
+        .setDescription('Track title or query to match (uses current track if omitted)')
+        .setRequired(false),
+    )
+    .addStringOption((option) =>
+      option
+        .setName('profile')
+        .setDescription('Acoustic vibe profile')
+        .setRequired(false)
         .addChoices(
-          { name: 'On', value: 'on' },
-          { name: 'Off', value: 'off' },
+          { name: 'Balanced (Default)', value: 'BALANCED' },
+          { name: 'Chill (Smooth & mellow)', value: 'CHILL' },
+          { name: 'Energetic (Upbeat & driving)', value: 'ENERGETIC' },
+        ),
+    ),
+
+  new SlashCommandBuilder()
+    .setName('smartshuffle')
+    .setDescription('Intelligently shuffle queue based on audio similarity and energy flow')
+    .addStringOption((option) =>
+      option
+        .setName('profile')
+        .setDescription('Acoustic energy profile')
+        .setRequired(false)
+        .addChoices(
+          { name: 'Balanced', value: 'BALANCED' },
+          { name: 'Chill', value: 'CHILL' },
+          { name: 'Energetic', value: 'ENERGETIC' },
+        ),
+    ),
+
+  new SlashCommandBuilder()
+    .setName('dj')
+    .setDescription('Manage Dynamic AI DJ mode')
+    .addSubcommand((sub) =>
+      sub
+        .setName('on')
+        .setDescription('Enable dynamic DJ mode')
+        .addStringOption((opt) =>
+          opt
+            .setName('profile')
+            .setDescription('DJ energy profile')
+            .setRequired(false)
+            .addChoices(
+              { name: 'Balanced (Default)', value: 'BALANCED' },
+              { name: 'Chill (Low energy transitions)', value: 'CHILL' },
+              { name: 'Energetic (High energy transitions)', value: 'ENERGETIC' },
+            ),
+        ),
+    )
+    .addSubcommand((sub) => sub.setName('off').setDescription('Disable dynamic DJ mode'))
+    .addSubcommand((sub) =>
+      sub.setName('status').setDescription('View current dynamic DJ status and lookahead queue'),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('profile')
+        .setDescription('Change DJ energy profile')
+        .addStringOption((opt) =>
+          opt
+            .setName('name')
+            .setDescription('DJ energy profile')
+            .setRequired(true)
+            .addChoices(
+              { name: 'Balanced', value: 'BALANCED' },
+              { name: 'Chill', value: 'CHILL' },
+              { name: 'Energetic', value: 'ENERGETIC' },
+            ),
         ),
     ),
 ];
@@ -412,6 +486,7 @@ export async function handleChatInputCommand(
   analyticsManager?: AnalyticsManager,
   playlistManager?: PlaylistManager,
   trackManager?: TrackManager,
+  recManager?: AiRecommendationManager,
 ): Promise<void> {
   const playbackManager: PlaybackManager =
     'playbackManager' in manager
@@ -1386,6 +1461,134 @@ export async function handleChatInputCommand(
           }
           break;
         }
+      }
+      break;
+    }
+
+    case 'vibe': {
+      if (!recManager) {
+        await interaction.reply({ content: 'AI recommendation service is not available.', ephemeral: true });
+        return;
+      }
+
+      await interaction.deferReply();
+      const trackQuery = interaction.options.getString('track');
+      const profile = (interaction.options.getString('profile') as DJProfile) || 'BALANCED';
+
+      let seedTrackId: string | undefined;
+      let seedTitle = 'Current Track';
+
+      if (trackQuery && trackManager) {
+        const found = await trackManager.search(trackQuery, 1);
+        if (found.length > 0) {
+          seedTrackId = found[0].id;
+          seedTitle = found[0].title;
+        }
+      }
+
+      if (!seedTrackId) {
+        const current = playbackManager.getCurrentTrack(guildId);
+        if (current && (current as any).trackId) {
+          seedTrackId = (current as any).trackId;
+          seedTitle = current.name;
+        }
+      }
+
+      if (!seedTrackId) {
+        await interaction.editReply('❌ No seed track specified and nothing is currently playing. Provide a track or play music first.');
+        return;
+      }
+
+      const recResult = await recManager.generateVibePlaylist(seedTrackId, guildId, 5, profile);
+      if (recResult.tracks.length === 0) {
+        await interaction.editReply(`🎧 Could not find similar tracks for **${seedTitle}** yet. As more tracks are analyzed, recommendations will populate.`);
+        return;
+      }
+
+      const embed = new EmbedBuilder()
+        .setTitle('🎧 VIBE MATCH')
+        .setColor(profile === 'CHILL' ? 0x3498db : profile === 'ENERGETIC' ? 0xe74c3c : 0x9b59b6)
+        .setDescription(`Based on: **${seedTitle}**\nProfile: \`${profile}\``);
+
+      const trackList = recResult.tracks
+        .map((t, idx) => {
+          const reasonStr = t.reasons.length > 0 ? `*${t.reasons.slice(0, 2).join(' • ')}*` : '';
+          return `**${idx + 1}. ${t.title}** ${t.artist ? `— ${t.artist}` : ''}\n   └ ${reasonStr}`;
+        })
+        .join('\n\n');
+
+      embed.addFields({ name: 'Suggested Vibe Queue', value: trackList || 'No tracks found' });
+
+      await interaction.editReply({ embeds: [embed] });
+      break;
+    }
+
+    case 'smartshuffle': {
+      if (!recManager) {
+        await interaction.reply({ content: 'AI recommendation service is not available.', ephemeral: true });
+        return;
+      }
+
+      await interaction.deferReply();
+      const profile = (interaction.options.getString('profile') as DJProfile) || 'BALANCED';
+      const queue = playbackManager.queueManager.inspectQueue(guildId);
+      const current = playbackManager.getCurrentTrack(guildId);
+
+      if (queue.length <= 1) {
+        await interaction.editReply('Queue must have at least 2 tracks to perform a smart shuffle.');
+        return;
+      }
+
+      const shuffled = await recManager.smartShuffle(guildId, queue, current, profile);
+      (playbackManager as any).queueManager?.setQueue(guildId, shuffled);
+
+      const embed = new EmbedBuilder()
+        .setTitle('🔀 Smart Shuffle Applied')
+        .setColor(0x2ecc71)
+        .setDescription(`Intelligently reordered **${shuffled.length}** tracks for smooth acoustic energy flow and rhythm continuity.\nProfile: \`${profile}\``);
+
+      await interaction.editReply({ embeds: [embed] });
+      break;
+    }
+
+    case 'dj': {
+      if (!recManager) {
+        await interaction.reply({ content: 'Dynamic DJ service is not available.', ephemeral: true });
+        return;
+      }
+
+      const sub = interaction.options.getSubcommand();
+
+      if (sub === 'on') {
+        const profile = (interaction.options.getString('profile') as DJProfile) || 'BALANCED';
+        recManager.configureDJ(guildId, { enabled: true, profile });
+        await interaction.reply(`🎛️ **Dynamic DJ is now ON**\nProfile: \`${profile}\`\nGakki will automatically select and queue matching tracks when your queue runs low!`);
+      } else if (sub === 'off') {
+        recManager.configureDJ(guildId, { enabled: false });
+        await interaction.reply('🎛️ **Dynamic DJ is now OFF**');
+      } else if (sub === 'profile') {
+        const profile = interaction.options.getString('name', true) as DJProfile;
+        recManager.configureDJ(guildId, { profile });
+        await interaction.reply(`🎛️ DJ Profile updated to **${profile}**`);
+      } else if (sub === 'status') {
+        const state = recManager.getDJState(guildId);
+        const embed = new EmbedBuilder()
+          .setTitle('🎛️ Dynamic DJ Status')
+          .setColor(state.enabled ? 0x2ecc71 : 0x95a5a6)
+          .addFields(
+            { name: 'Status', value: state.enabled ? '🟢 Enabled' : '⚪ Disabled', inline: true },
+            { name: 'Profile', value: `\`${state.profile}\``, inline: true },
+            { name: 'Recent History', value: `${state.recentTrackIds.length} tracks cached`, inline: true },
+          );
+
+        if (state.lookaheadQueue.length > 0) {
+          const queueText = state.lookaheadQueue
+            .map((c, i) => `${i + 1}. **${c.title}** ${c.artist ? `(${c.artist})` : ''} — *${c.reasons[0] || 'Vibe match'}*`)
+            .join('\n');
+          embed.addFields({ name: 'Lookahead Next Queue', value: queueText });
+        }
+
+        await interaction.reply({ embeds: [embed] });
       }
       break;
     }

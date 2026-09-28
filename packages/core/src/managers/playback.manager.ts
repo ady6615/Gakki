@@ -1030,6 +1030,8 @@ export class PlaybackManager {
           trackDuration: track.duration,
           sessionId,
           startedAt: now,
+          trackTitle: track.name,
+          artist: track.artist,
         });
       } catch (err) {
         this.logger.error({ err, eventId }, 'Failed to record playback start in AnalyticsManager');

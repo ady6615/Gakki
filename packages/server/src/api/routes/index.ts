@@ -6,6 +6,7 @@ import type {
   AnalyticsManager,
   PlaylistManager,
   TrackManager,
+  AiRecommendationManager,
 } from '@gakki/core';
 import { healthRoutes } from './health.routes';
 import { playbackRoutes } from './playback.routes';
@@ -14,6 +15,7 @@ import { artworkRoutes } from './artwork.routes';
 import { sourceRoutes } from './source.routes';
 import { historyRoutes } from './history.routes';
 import { playlistRoutes } from './playlist.routes';
+import { recommendationRoutes } from './recommendation.routes';
 import { ArtworkService } from '../../services/artwork.service';
 
 /**
@@ -27,6 +29,7 @@ export function createRoutes(
   analyticsManager?: AnalyticsManager,
   playlistManager?: PlaylistManager,
   trackManager?: TrackManager,
+  recManager?: AiRecommendationManager,
 ): Router {
   const router = Router();
 
@@ -45,6 +48,7 @@ export function createRoutes(
     '/playlists',
     playlistRoutes(playlistManager, activePlaybackManager, audioSourceManager, trackManager),
   );
+  router.use('/recommendations', recommendationRoutes(recManager, activePlaybackManager));
 
   return router;
 }
