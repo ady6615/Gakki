@@ -13,7 +13,7 @@
 export * from './types';
 
 // Database
-export { connectDatabase, disconnectDatabase, getDatabase } from './database';
+export { connectDatabase, disconnectDatabase, getDatabase, getDatabasePool } from './database';
 export type { DatabaseClient } from './database';
 export { schema } from './database';
 
@@ -50,5 +50,12 @@ export { StemManager } from './managers/stem.manager';
 export { VocalActivityService } from './services/vocal-activity.service';
 export { VocalClashService } from './services/vocal-clash.service';
 export { LayeredTransitionEngine } from './services/layered-transition-engine';
+export { FavoritesManager } from './managers/favorites.manager';
+export { LibraryManager } from './managers/library.manager';
+export { LrcLibLyricsProvider } from './services/lyrics/lrclib.provider';
+export { MockLyricsProvider } from './services/lyrics/mock.provider';
+export { LyricsProviderRegistry } from './services/lyrics/lyrics-provider.registry';
+export { parseLrcLyrics, findActiveLyricLineIndex } from './utils/lrc-parser';
+export { computeLyricsMatchConfidence, normalizeSongString, stringSimilarity } from './utils/lyrics-matcher';
 
 

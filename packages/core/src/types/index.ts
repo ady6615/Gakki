@@ -8,3 +8,8 @@ export * from './source';
 export * from './recommendation';
 export * from './transition';
 export * from './stem';
+export * from './lyrics';
+export * from './favorite';
+export * from './recording';
+export * from './permissions';
+export * from './library';

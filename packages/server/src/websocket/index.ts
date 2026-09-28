@@ -168,6 +168,55 @@ export function createWebSocketServer(
       logger.error({ err: error }, 'WebSocket client error');
     });
 
+    ws.on('message', (raw) => {
+      try {
+        const msg = JSON.parse(raw.toString());
+        if (msg.type === 'request_state') {
+          const targetGuildId = msg.guildId || '';
+          const stateToSend = activePlaybackManager
+            ? activePlaybackManager.getState(targetGuildId)
+            : lastKnownState;
+          ws.send(
+            JSON.stringify({
+              type: 'playback_state',
+              payload: stateToSend,
+              timestamp: new Date().toISOString(),
+            }),
+          );
+
+          const qEvent = activePlaybackManager
+            ? activePlaybackManager.getQueueEvent(targetGuildId)
+            : lastKnownQueues.get(targetGuildId) || null;
+          if (qEvent) {
+            ws.send(
+              JSON.stringify({
+                type: 'queue.updated',
+                ...qEvent,
+                timestamp: new Date().toISOString(),
+              }),
+            );
+          }
+
+          if (activePlaybackManager) {
+            const sState = activePlaybackManager.getGuildState(targetGuildId);
+            ws.send(
+              JSON.stringify({
+                type: 'playback.settings.updated',
+                guildId: sState.guildId,
+                volume: sState.volume,
+                filters: sState.filters,
+                loopMode: sState.loopMode,
+                stayInChannel: sState.stayInChannel,
+                timestamp: new Date().toISOString(),
+              }),
+            );
+          }
+        }
+      } catch {
+        // Ignore unparseable client messages
+      }
+    });
+
     // 1. Connection acknowledgement
     ws.send(
       JSON.stringify({

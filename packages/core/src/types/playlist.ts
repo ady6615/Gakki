@@ -14,6 +14,8 @@ export interface Playlist {
   trackCount: number;
   createdAt: ISOTimestamp;
   updatedAt: ISOTimestamp;
+  coverArt?: string | null;
+  isFavorite?: boolean;
 }
 
 /** A track within a playlist, with position and persistent metadata */
@@ -47,6 +49,7 @@ export interface CreatePlaylistInput {
   ownerUserId?: string;
   guildId?: string;
   visibility?: PlaylistVisibility;
+  coverArt?: string;
 }
 
 /** Data for updating an existing playlist */
@@ -54,6 +57,8 @@ export interface UpdatePlaylistInput {
   name?: string;
   description?: string | null;
   visibility?: PlaylistVisibility;
+  coverArt?: string | null;
+  isFavorite?: boolean;
 }
 
 /** Reorder track payload */

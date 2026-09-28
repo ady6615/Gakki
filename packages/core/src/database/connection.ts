@@ -61,6 +61,13 @@ export function getDatabase(): DatabaseClient {
 }
 
 /**
+ * Get the underlying pg.Pool if available.
+ */
+export function getDatabasePool(): pg.Pool | null {
+  return pool;
+}
+
+/**
  * Close the database connection pool gracefully.
  */
 export async function disconnectDatabase(): Promise<void> {

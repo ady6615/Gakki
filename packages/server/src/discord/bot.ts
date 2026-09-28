@@ -7,6 +7,8 @@ import type {
   PlaylistManager,
   TrackManager,
   AiRecommendationManager,
+  LyricsManager,
+  FavoritesManager,
 } from '@gakki/core';
 import { createLogger } from '@gakki/core';
 import {
@@ -32,6 +34,9 @@ let client: Client | null = null;
  * @param analyticsManager - Optional AnalyticsManager for playback history and metrics
  * @param playlistManager - Optional PlaylistManager for saved playlists
  * @param trackManager - Optional TrackManager for persistent tracks
+ * @param recManager - Optional AiRecommendationManager
+ * @param lyricsManager - Optional LyricsManager
+ * @param favoritesManager - Optional FavoritesManager
  * @returns The connected Discord.js Client
  */
 export async function createDiscordBot(
@@ -42,6 +47,8 @@ export async function createDiscordBot(
   playlistManager?: PlaylistManager,
   trackManager?: TrackManager,
   recManager?: AiRecommendationManager,
+  lyricsManager?: LyricsManager,
+  favoritesManager?: FavoritesManager,
 ): Promise<Client> {
   client = new Client({
     intents: [
@@ -104,6 +111,8 @@ export async function createDiscordBot(
           playlistManager,
           trackManager,
           recManager,
+          lyricsManager,
+          favoritesManager,
         );
       }
     } catch (err) {

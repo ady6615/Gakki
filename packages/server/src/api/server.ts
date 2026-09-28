@@ -11,6 +11,9 @@ import type {
   PlaylistManager,
   TrackManager,
   AiRecommendationManager,
+  LyricsManager,
+  FavoritesManager,
+  LibraryManager,
 } from '@gakki/core';
 import { createLogger } from '@gakki/core';
 import { createRoutes } from './routes';
@@ -34,6 +37,9 @@ export function createApiServer(
   playlistManager?: PlaylistManager,
   trackManager?: TrackManager,
   recManager?: AiRecommendationManager,
+  lyricsManager?: LyricsManager,
+  favoritesManager?: FavoritesManager,
+  libraryManager?: LibraryManager,
 ): { app: express.Application; server: http.Server } {
   const app = express();
 
@@ -52,6 +58,9 @@ export function createApiServer(
       playlistManager,
       trackManager,
       recManager,
+      lyricsManager,
+      favoritesManager,
+      libraryManager,
     ),
   );
 

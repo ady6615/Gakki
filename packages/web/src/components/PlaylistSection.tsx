@@ -8,6 +8,8 @@ export interface PlaylistSummary {
   guildId: string | null;
   visibility: 'public' | 'private' | 'guild';
   trackCount: number;
+  coverArt?: string | null;
+  isFavorite?: boolean;
 }
 
 export interface PlaylistTrackItem {
@@ -40,7 +42,7 @@ export interface RecentTrackItem {
   durationListened: number;
 }
 
-const API_BASE = 'http://localhost:3000/api';
+const API_BASE = '/api';
 
 function formatDuration(seconds?: number | null): string {
   if (seconds == null || isNaN(seconds)) return '--:--';
@@ -56,6 +58,9 @@ export function PlaylistSection() {
   const [playlistTracks, setPlaylistTracks] = useState<PlaylistTrackItem[]>([]);
   const [recentTracks, setRecentTracks] = useState<RecentTrackItem[]>([]);
   const [activeTab, setActiveTab] = useState<'playlists' | 'recent'>('playlists');
+
+  const [draggedTrackIndex, setDraggedTrackIndex] = useState<number | null>(null);
+  const [dropTrackTargetIndex, setDropTrackTargetIndex] = useState<number | null>(null);
 
   // Form states
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -266,26 +271,123 @@ export function PlaylistSection() {
     }
   };
 
-  // Reorder track
-  const handleReorderTrack = async (fromPos: number, toPos: number) => {
-    if (!selectedPlaylist || toPos < 1 || toPos > playlistTracks.length) return;
-    try {
-      const res = await fetch(`${API_BASE}/playlists/${selectedPlaylist.id}/reorder`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fromPosition: fromPos, toPosition: toPos }),
-      });
-      if (res.ok) {
-        await fetchPlaylistDetails(selectedPlaylist.id);
-      }
-    } catch {
-      // Ignore
-    }
-  };
-
   const showMessage = (msg: string) => {
     setStatusMessage(msg);
     setTimeout(() => setStatusMessage(null), 4000);
+  };
+
+  // Batch Reorder (Requirement 8)
+  const handleBatchReorder = async (reordered: PlaylistTrackItem[]) => {
+    if (!selectedPlaylist) return;
+    const backup = [...playlistTracks];
+    const reindexed = reordered.map((t, idx) => ({ ...t, position: idx + 1 }));
+    setPlaylistTracks(reindexed);
+
+    try {
+      const trackIds = reindexed.map((t) => t.trackId);
+      const res = await fetch(`${API_BASE}/playlists/${selectedPlaylist.id}/reorder-batch`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ trackIds }),
+      });
+      if (!res.ok) throw new Error('Reorder failed');
+      await fetchPlaylistDetails(selectedPlaylist.id);
+    } catch {
+      setPlaylistTracks(backup);
+      showMessage('Failed to reorder playlist. Reverted changes.');
+    }
+  };
+
+  // Duplicate Playlist (Requirement 7)
+  const handleDuplicatePlaylist = async () => {
+    if (!selectedPlaylist) return;
+    try {
+      const res = await fetch(`${API_BASE}/playlists/${selectedPlaylist.id}/duplicate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ newName: `${selectedPlaylist.name} (Copy)` }),
+      });
+      if (res.ok) {
+        const dup = await res.json();
+        showMessage(`Duplicated playlist as "${dup.name}"`);
+        await fetchPlaylists();
+        setSelectedPlaylist(dup);
+      }
+    } catch (err: any) {
+      showMessage(`Duplicate failed: ${err.message}`);
+    }
+  };
+
+  // Rename Playlist (Requirement 7)
+  const handleRenamePlaylist = async () => {
+    if (!selectedPlaylist) return;
+    const newName = prompt('Enter new playlist name:', selectedPlaylist.name);
+    if (!newName || !newName.trim() || newName.trim() === selectedPlaylist.name) return;
+
+    try {
+      const res = await fetch(`${API_BASE}/playlists/${selectedPlaylist.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newName.trim() }),
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setSelectedPlaylist((prev) => (prev ? { ...prev, name: updated.name } : null));
+        await fetchPlaylists();
+        showMessage(`Renamed playlist to "${updated.name}"`);
+      }
+    } catch (err: any) {
+      showMessage(`Rename failed: ${err.message}`);
+    }
+  };
+
+  // Toggle Favorite Playlist (Requirement 7)
+  const handleToggleFavoritePlaylist = async () => {
+    if (!selectedPlaylist) return;
+    const nextState = !selectedPlaylist.isFavorite;
+    try {
+      const res = await fetch(`${API_BASE}/playlists/${selectedPlaylist.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isFavorite: nextState }),
+      });
+      if (res.ok) {
+        setSelectedPlaylist((prev) => (prev ? { ...prev, isFavorite: nextState } : null));
+        await fetchPlaylists();
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  // Drag handlers for playlist tracks
+  const handleTrackDragStart = (e: React.DragEvent, index: number) => {
+    setDraggedTrackIndex(index);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', `${index}`);
+  };
+
+  const handleTrackDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    if (dropTrackTargetIndex !== index) {
+      setDropTrackTargetIndex(index);
+    }
+  };
+
+  const handleTrackDrop = (e: React.DragEvent, targetIndex: number) => {
+    e.preventDefault();
+    setDraggedTrackIndex(null);
+    setDropTrackTargetIndex(null);
+
+    const sourceStr = e.dataTransfer.getData('text/plain');
+    const sourceIndex = parseInt(sourceStr, 10);
+    if (isNaN(sourceIndex) || sourceIndex === targetIndex) return;
+
+    const updated = [...playlistTracks];
+    const [moved] = updated.splice(sourceIndex, 1);
+    updated.splice(targetIndex, 0, moved);
+    handleBatchReorder(updated);
   };
 
   return (
@@ -470,7 +572,31 @@ export function PlaylistSection() {
                     )}
                   </div>
 
-                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                    <button
+                      className="btn btn-secondary"
+                      onClick={handleToggleFavoritePlaylist}
+                      style={{ padding: '0.4rem 0.6rem', fontSize: '0.85rem' }}
+                      title={selectedPlaylist.isFavorite ? 'Remove favorite' : 'Mark as favorite'}
+                    >
+                      {selectedPlaylist.isFavorite ? '❤️' : '🤍'}
+                    </button>
+                    <button
+                      className="btn btn-secondary"
+                      onClick={handleRenamePlaylist}
+                      style={{ padding: '0.4rem 0.6rem', fontSize: '0.85rem' }}
+                      title="Rename playlist"
+                    >
+                      ✏️ Rename
+                    </button>
+                    <button
+                      className="btn btn-secondary"
+                      onClick={handleDuplicatePlaylist}
+                      style={{ padding: '0.4rem 0.6rem', fontSize: '0.85rem' }}
+                      title="Duplicate playlist"
+                    >
+                      📋 Duplicate
+                    </button>
                     <button
                       className="btn btn-primary"
                       onClick={() => handlePlayPlaylist(selectedPlaylist.id, selectedPlaylist.name)}
@@ -517,26 +643,34 @@ export function PlaylistSection() {
                   </button>
                 </form>
 
-                {/* Track List Table */}
+                {/* Track List Table with Drag-and-Drop (Requirement 8) */}
                 {playlistTracks.length === 0 ? (
                   <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', textAlign: 'center', padding: '2rem' }}>
                     This playlist has no tracks yet. Add one above!
                   </p>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-                    {playlistTracks.map((pt) => (
+                    {playlistTracks.map((pt, index) => (
                       <div
                         key={pt.id || `${pt.trackId}_${pt.position}`}
+                        draggable
+                        onDragStart={(e) => handleTrackDragStart(e, index)}
+                        onDragOver={(e) => handleTrackDragOver(e, index)}
+                        onDrop={(e) => handleTrackDrop(e, index)}
                         style={{
                           display: 'flex',
                           alignItems: 'center',
                           padding: '0.5rem 0.75rem',
-                          background: 'rgba(255, 255, 255, 0.02)',
+                          background: draggedTrackIndex === index ? 'rgba(124, 92, 252, 0.15)' : 'rgba(255, 255, 255, 0.02)',
                           borderRadius: '6px',
-                          border: '1px solid var(--border-color)',
+                          border: dropTrackTargetIndex === index ? '1px dashed #a78bfa' : '1px solid var(--border-color)',
                           fontSize: '0.85rem',
+                          cursor: 'grab',
                         }}
                       >
+                        <span style={{ cursor: 'grab', marginRight: '8px', color: 'var(--text-muted)' }} title="Drag to reorder">
+                          ☰
+                        </span>
                         <span style={{ width: '28px', color: 'var(--text-muted)', fontWeight: 600 }}>
                           #{pt.position}
                         </span>
@@ -559,21 +693,39 @@ export function PlaylistSection() {
                             {formatDuration(pt.track?.duration)}
                           </span>
 
-                          {/* Reorder Buttons */}
+                          {/* Accessible Reorder Buttons */}
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                             <button
                               type="button"
-                              onClick={() => handleReorderTrack(pt.position, pt.position - 1)}
-                              disabled={pt.position <= 1}
-                              style={{ background: 'none', border: 'none', color: pt.position <= 1 ? '#444' : 'var(--text-secondary)', cursor: pt.position <= 1 ? 'default' : 'pointer', fontSize: '0.65rem' }}
+                              onClick={() => {
+                                if (index > 0) {
+                                  const updated = [...playlistTracks];
+                                  const temp = updated[index];
+                                  updated[index] = updated[index - 1];
+                                  updated[index - 1] = temp;
+                                  handleBatchReorder(updated);
+                                }
+                              }}
+                              disabled={index === 0}
+                              style={{ background: 'none', border: 'none', color: index === 0 ? '#444' : 'var(--text-secondary)', cursor: index === 0 ? 'default' : 'pointer', fontSize: '0.65rem' }}
+                              title="Move track up"
                             >
                               ▲
                             </button>
                             <button
                               type="button"
-                              onClick={() => handleReorderTrack(pt.position, pt.position + 1)}
-                              disabled={pt.position >= playlistTracks.length}
-                              style={{ background: 'none', border: 'none', color: pt.position >= playlistTracks.length ? '#444' : 'var(--text-secondary)', cursor: pt.position >= playlistTracks.length ? 'default' : 'pointer', fontSize: '0.65rem' }}
+                              onClick={() => {
+                                if (index < playlistTracks.length - 1) {
+                                  const updated = [...playlistTracks];
+                                  const temp = updated[index];
+                                  updated[index] = updated[index + 1];
+                                  updated[index + 1] = temp;
+                                  handleBatchReorder(updated);
+                                }
+                              }}
+                              disabled={index >= playlistTracks.length - 1}
+                              style={{ background: 'none', border: 'none', color: index >= playlistTracks.length - 1 ? '#444' : 'var(--text-secondary)', cursor: index >= playlistTracks.length - 1 ? 'default' : 'pointer', fontSize: '0.65rem' }}
+                              title="Move track down"
                             >
                               ▼
                             </button>

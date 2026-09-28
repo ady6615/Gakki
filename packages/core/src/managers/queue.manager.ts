@@ -89,6 +89,16 @@ export class QueueManager {
   }
 
   /**
+   * Alias for addTrack.
+   */
+  enqueue(
+    guildId: string,
+    trackInput: Omit<QueueTrack, 'id'> & { id?: string },
+  ): QueueTrack {
+    return this.addTrack(guildId, trackInput);
+  }
+
+  /**
    * Add multiple tracks to the end of the guild's queue in the given order.
    */
   addTracks(
@@ -322,6 +332,77 @@ export class QueueManager {
     );
     this.notifyChange(guildId);
     return track;
+  }
+
+  /**
+   * Reorders entire queue based on an ordered array of track IDs.
+   * Authoritative backend operation for web drag-and-drop.
+   */
+  reorderQueue(guildId: string, orderedTrackIds: string[]): QueueTrack[] {
+    const queue = this.queues.get(guildId);
+    if (!queue || queue.tracks.length === 0 || !orderedTrackIds || orderedTrackIds.length === 0) {
+      return queue ? [...queue.tracks] : [];
+    }
+
+    const trackMap = new Map(queue.tracks.map((t) => [t.id, t]));
+    const reordered: QueueTrack[] = [];
+
+    for (const id of orderedTrackIds) {
+      const track = trackMap.get(id);
+      if (track) {
+        reordered.push(track);
+        trackMap.delete(id);
+      }
+    }
+
+    // Append any tracks that were not included in the reordered list
+    for (const remaining of trackMap.values()) {
+      reordered.push(remaining);
+    }
+
+    queue.tracks = reordered;
+    this.logger.info(
+      { guildId, count: reordered.length },
+      '[QUEUE] Reordered queue via batch operation'
+    );
+    this.notifyChange(guildId);
+    return [...queue.tracks];
+  }
+
+  /**
+   * Move specified track to the top of the queue (position 1, next up).
+   */
+  moveToTop(guildId: string, trackId: string): QueueTrack | null {
+    const queue = this.queues.get(guildId);
+    if (!queue) return null;
+    const index = queue.tracks.findIndex((t) => t.id === trackId);
+    if (index <= 0) return index === 0 ? queue.tracks[0] : null;
+    const [track] = queue.tracks.splice(index, 1);
+    queue.tracks.unshift(track);
+    this.notifyChange(guildId);
+    return track;
+  }
+
+  /**
+   * Move specified track to the bottom of the queue.
+   */
+  moveToBottom(guildId: string, trackId: string): QueueTrack | null {
+    const queue = this.queues.get(guildId);
+    if (!queue) return null;
+    const index = queue.tracks.findIndex((t) => t.id === trackId);
+    if (index === -1) return null;
+    if (index === queue.tracks.length - 1) return queue.tracks[index];
+    const [track] = queue.tracks.splice(index, 1);
+    queue.tracks.push(track);
+    this.notifyChange(guildId);
+    return track;
+  }
+
+  /**
+   * Set specified track to play next (position 0 in queue).
+   */
+  playNext(guildId: string, trackId: string): QueueTrack | null {
+    return this.moveToTop(guildId, trackId);
   }
 
   /**

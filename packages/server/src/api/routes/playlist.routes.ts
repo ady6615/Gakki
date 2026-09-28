@@ -377,5 +377,81 @@ export function playlistRoutes(
     }
   });
 
+  /**
+   * PUT /api/playlists/:id/reorder-batch
+   * Single authoritative batch reorder operation for web drag-and-drop (Requirement 8).
+   * Body: { orderedItemIds: string[], userId?: string }
+   */
+  router.put('/:id/reorder-batch', async (req: Request, res: Response) => {
+    if (!playlistManager) {
+      return res.status(503).json({ error: 'Playlist service unavailable' });
+    }
+
+    const { id } = req.params;
+    const { orderedItemIds, userId } = req.body;
+
+    if (!Array.isArray(orderedItemIds)) {
+      return res.status(400).json({ error: 'orderedItemIds array is required' });
+    }
+
+    try {
+      const tracks = await playlistManager.reorderTracksBatch(id, orderedItemIds, userId);
+      return res.json({ success: true, tracks });
+    } catch (err: any) {
+      if (err.name === 'PlaylistPermissionError') {
+        return res.status(403).json({ error: err.message });
+      }
+      return res.status(500).json({ error: err.message || 'Failed to reorder playlist' });
+    }
+  });
+
+  /**
+   * POST /api/playlists/:id/duplicate
+   * Duplicates a playlist and its tracks (Requirement 7).
+   * Body: { newName: string, userId?: string }
+   */
+  router.post('/:id/duplicate', async (req: Request, res: Response) => {
+    if (!playlistManager) {
+      return res.status(503).json({ error: 'Playlist service unavailable' });
+    }
+
+    const { id } = req.params;
+    const { newName, userId } = req.body;
+
+    if (!newName || typeof newName !== 'string' || !newName.trim()) {
+      return res.status(400).json({ error: 'newName is required' });
+    }
+
+    try {
+      const playlist = await playlistManager.duplicatePlaylist(id, newName.trim(), userId);
+      return res.status(201).json({ playlist });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || 'Failed to duplicate playlist' });
+    }
+  });
+
+  /**
+   * DELETE /api/playlists/:id/tracks/:position
+   * Remove a track at position number (Requirement 7).
+   */
+  router.delete('/:id/tracks/:position', async (req: Request, res: Response) => {
+    if (!playlistManager) {
+      return res.status(503).json({ error: 'Playlist service unavailable' });
+    }
+
+    const { id, position } = req.params;
+    const pos = parseInt(position, 10);
+    if (isNaN(pos) || pos < 1) {
+      return res.status(400).json({ error: 'Invalid position' });
+    }
+
+    try {
+      const removed = await playlistManager.removeTrackFromPlaylist(id, pos);
+      return res.json({ success: removed });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || 'Failed to remove track from playlist' });
+    }
+  });
+
   return router;
 }

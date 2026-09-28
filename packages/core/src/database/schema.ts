@@ -72,6 +72,8 @@ export const playlists = pgTable('playlists', {
   ownerUserId: varchar('owner_user_id', { length: 100 }),
   guildId: varchar('guild_id', { length: 100 }),
   visibility: varchar('visibility', { length: 50 }).notNull().default('guild'),
+  coverArt: text('cover_art'),
+  isFavorite: boolean('is_favorite').default(false),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
@@ -108,6 +110,31 @@ export const playbackEvents = pgTable('playback_events', {
   source: varchar('source', { length: 100 }),
   sessionId: varchar('session_id', { length: 100 }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+/** User Favorites (Phase 10) — persistent user-level saved tracks */
+export const userFavorites = pgTable('user_favorites', {
+  userId: varchar('user_id', { length: 100 }).notNull(),
+  trackId: uuid('track_id')
+    .notNull()
+    .references(() => tracks.id, { onDelete: 'cascade' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+/** Track Lyrics Cache (Phase 10) — cached lyrics from provider lookup */
+export const trackLyricsCache = pgTable('track_lyrics_cache', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  trackId: uuid('track_id').references(() => tracks.id, { onDelete: 'cascade' }),
+  artist: varchar('artist', { length: 500 }),
+  title: varchar('title', { length: 500 }).notNull(),
+  provider: varchar('provider', { length: 50 }).notNull(),
+  plainLyrics: text('plain_lyrics').notNull(),
+  syncedLyrics: text('synced_lyrics'), // JSON string of LyricsLine[]
+  isSynced: boolean('is_synced').default(false),
+  confidence: real('confidence').default(1.0),
+  attribution: text('attribution'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
 /** Track acoustic features & embeddings for smart recommendations */

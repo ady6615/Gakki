@@ -13,6 +13,10 @@ import {
   AiRecommendationManager,
   TransitionFeatureManager,
   StemManager,
+  getDatabasePool,
+  LyricsManager,
+  FavoritesManager,
+  LibraryManager,
 } from '@gakki/core';
 import { createApiServer } from './api/server';
 import { createDiscordBot, DiscordVoiceAdapter } from './discord';
@@ -214,6 +218,12 @@ async function main(): Promise<void> {
     }
   });
 
+  // ── Phase 10: Lyrics, Favorites & Library Services ─────────────
+  const dbPool = getDatabasePool() || undefined;
+  const lyricsManager = new LyricsManager({ pool: dbPool });
+  const favoritesManager = dbPool ? new FavoritesManager(dbPool) : undefined;
+  const libraryManager = dbPool ? new LibraryManager(dbPool, recManager.featureManager, recManager) : undefined;
+
   // ── API Server ─────────────────────────────────────────────────
   const { server } = createApiServer(
     config.API_PORT,
@@ -224,6 +234,9 @@ async function main(): Promise<void> {
     playlistManager,
     trackManager,
     recManager,
+    lyricsManager,
+    favoritesManager,
+    libraryManager,
   );
 
   // ── WebSocket ──────────────────────────────────────────────────
@@ -242,6 +255,8 @@ async function main(): Promise<void> {
         playlistManager,
         trackManager,
         recManager,
+        lyricsManager,
+        favoritesManager,
       );
       const voiceAdapter = new DiscordVoiceAdapter(discordClient);
       playbackManager.registerAdapter(voiceAdapter);

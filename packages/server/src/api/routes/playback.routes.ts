@@ -200,6 +200,48 @@ export function playbackRoutes(manager?: PlaybackManager | AudioPlayerManager): 
     res.json({ success: true, track: moved });
   });
 
+  /**
+   * POST /api/playback/:guildId/pause
+   * Pause current playback.
+   */
+  router.post('/:guildId/pause', (req, res) => {
+    const { guildId } = req.params;
+    if (!activePlaybackManager) {
+      res.status(503).json({ success: false, error: 'Playback manager not initialized' });
+      return;
+    }
+    const paused = activePlaybackManager.pause(guildId);
+    res.json({ success: true, paused });
+  });
+
+  /**
+   * POST /api/playback/:guildId/resume
+   * Resume playback.
+   */
+  router.post('/:guildId/resume', (req, res) => {
+    const { guildId } = req.params;
+    if (!activePlaybackManager) {
+      res.status(503).json({ success: false, error: 'Playback manager not initialized' });
+      return;
+    }
+    const resumed = activePlaybackManager.resume(guildId);
+    res.json({ success: true, resumed });
+  });
+
+  /**
+   * POST /api/playback/:guildId/skip
+   * Skip current track.
+   */
+  router.post('/:guildId/skip', async (req, res) => {
+    const { guildId } = req.params;
+    if (!activePlaybackManager) {
+      res.status(503).json({ success: false, error: 'Playback manager not initialized' });
+      return;
+    }
+    const result = await activePlaybackManager.skip(guildId);
+    res.json({ success: true, ...result });
+  });
+
   return router;
 }
 

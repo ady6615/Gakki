@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { eq, and, desc, sql, lt } from 'drizzle-orm';
 import type { DatabaseClient } from '../database/connection';
 import * as schema from '../database/schema';
+import type { AnalyticsDashboardStats } from '../types/library';
 
 export type PlaybackEndReason = 'finished' | 'skipped' | 'stopped' | 'error';
 
@@ -715,6 +716,278 @@ export class AnalyticsManager {
         uniqueTracks: 0,
         topTracks: [],
         topArtists: [],
+      };
+    }
+  }
+
+  /**
+   * Aggregate statistics for dashboard with guild/user isolation and time-range filtering.
+   * Supports 'today', '7d', '30d', and 'all'.
+   */
+  async getDashboardStats(
+    optionsOrRange?:
+      | {
+          guildId?: string;
+          userId?: string;
+          timeRange?: 'today' | '7d' | '30d' | 'all';
+        }
+      | 'today'
+      | '7d'
+      | '30d'
+      | 'all',
+    guildIdOrUserId?: string
+  ): Promise<AnalyticsDashboardStats> {
+    let options: {
+      guildId?: string;
+      userId?: string;
+      timeRange?: 'today' | '7d' | '30d' | 'all';
+    };
+
+    if (typeof optionsOrRange === 'string') {
+      options = {
+        timeRange: optionsOrRange,
+        guildId: guildIdOrUserId,
+      };
+    } else {
+      options = optionsOrRange || {};
+    }
+
+    const timeRange = options.timeRange || '7d';
+    let cutoff: Date | null = null;
+
+    if (timeRange === 'today') {
+      cutoff = new Date();
+      cutoff.setHours(0, 0, 0, 0);
+    } else if (timeRange === '7d') {
+      cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    } else if (timeRange === '30d') {
+      cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    }
+
+    if (!this.db) {
+      let events = Array.from(this.inMemoryEvents.values());
+      if (options.guildId) {
+        events = events.filter((e) => e.guildId === options.guildId);
+      }
+      if (options.userId) {
+        events = events.filter((e) => e.userId === options.userId);
+      }
+      if (cutoff) {
+        events = events.filter((e) => e.startedAt >= cutoff!);
+      }
+
+      const totalPlays = events.length;
+      const totalListeningSeconds = events.reduce((sum, e) => sum + (e.durationListened || 0), 0);
+      const completedPlays = events.filter((e) => e.completed).length;
+      const skippedPlays = events.filter((e) => e.endReason === 'skipped').length;
+      const completionRate = totalPlays > 0 ? Math.round((completedPlays / totalPlays) * 100) / 100 : 0;
+      const skipRate = totalPlays > 0 ? Math.round((skippedPlays / totalPlays) * 100) / 100 : 0;
+
+      // Top tracks
+      const trackMap = new Map<string, { trackId: string; title: string; artist: string | null; playCount: number; duration: number | null }>();
+      for (const e of events) {
+        const item = trackMap.get(e.trackId) || {
+          trackId: e.trackId,
+          title: e.trackTitle || ('Track ' + e.trackId),
+          artist: e.artist ?? null,
+          playCount: 0,
+          duration: e.trackDuration ?? null,
+        };
+        item.playCount++;
+        trackMap.set(e.trackId, item);
+      }
+      const topTracks = Array.from(trackMap.values()).sort((a, b) => b.playCount - a.playCount).slice(0, 10);
+
+      // Top artists
+      const artistMap = new Map<string, number>();
+      for (const e of events) {
+        if (e.artist) {
+          artistMap.set(e.artist, (artistMap.get(e.artist) || 0) + 1);
+        }
+      }
+      const topArtists = Array.from(artistMap.entries())
+        .map(([artist, playCount]) => ({ artist, playCount }))
+        .sort((a, b) => b.playCount - a.playCount)
+        .slice(0, 10);
+
+      // Top listeners (guild view only)
+      let topListeners: Array<{ userId: string; playCount: number; durationSeconds: number }> | undefined;
+      if (!options.userId && options.guildId) {
+        const userMap = new Map<string, { userId: string; playCount: number; durationSeconds: number }>();
+        for (const e of events) {
+          if (e.userId) {
+            const userItem = userMap.get(e.userId) || { userId: e.userId, playCount: 0, durationSeconds: 0 };
+            userItem.playCount++;
+            userItem.durationSeconds += (e.durationListened || 0);
+            userMap.set(e.userId, userItem);
+          }
+        }
+        topListeners = Array.from(userMap.values())
+          .sort((a, b) => b.playCount - a.playCount)
+          .slice(0, 10);
+      }
+
+      return {
+        totalPlays,
+        totalListeningSeconds,
+        completionRate,
+        skipRate,
+        topTracks,
+        mostPlayedTracks: topTracks,
+        topArtists,
+        topListeners,
+        mostActiveListeners: topListeners || [],
+        timeRange,
+      };
+    }
+
+    try {
+      // Dynamic SQL conditions using Drizzle sql template
+      const conditions: any[] = [];
+      if (options.guildId) {
+        conditions.push(sql`pe.guild_id = ${options.guildId}`);
+      }
+      if (options.userId) {
+        conditions.push(sql`pe.user_id = ${options.userId}`);
+      }
+      if (cutoff) {
+        conditions.push(sql`pe.started_at >= ${cutoff.toISOString()}`);
+      }
+
+      const whereSql = conditions.length > 0
+        ? sql`WHERE ${sql.join(conditions, sql` AND `)}`
+        : sql``;
+
+      // 1. Overview metrics
+      const overviewRes = await this.db.execute<{
+        total_plays: number;
+        total_listening_seconds: number;
+        completed_plays: number;
+        skipped_plays: number;
+      }>(sql`
+        SELECT
+          COUNT(*)::int AS total_plays,
+          COALESCE(SUM(pe.duration_listened), 0)::int AS total_listening_seconds,
+          COUNT(*) FILTER (WHERE pe.completed = true)::int AS completed_plays,
+          COUNT(*) FILTER (WHERE pe.end_reason = 'skipped')::int AS skipped_plays
+        FROM playback_events pe
+        ${whereSql}
+      `);
+
+      const overview = overviewRes.rows[0] ?? {
+        total_plays: 0,
+        total_listening_seconds: 0,
+        completed_plays: 0,
+        skipped_plays: 0,
+      };
+
+      const totalPlays = Number(overview.total_plays);
+      const completionRate = totalPlays > 0 ? Math.round((Number(overview.completed_plays) / totalPlays) * 100) / 100 : 0;
+      const skipRate = totalPlays > 0 ? Math.round((Number(overview.skipped_plays) / totalPlays) * 100) / 100 : 0;
+
+      // 2. Top tracks
+      const topTracksRes = await this.db.execute<{
+        track_id: string;
+        title: string;
+        artist: string | null;
+        play_count: number;
+        duration: number | null;
+      }>(sql`
+        SELECT
+          pe.track_id,
+          t.title,
+          t.artist,
+          t.duration,
+          COUNT(*)::int AS play_count
+        FROM playback_events pe
+        JOIN tracks t ON pe.track_id = t.id
+        ${whereSql}
+        GROUP BY pe.track_id, t.title, t.artist, t.duration
+        ORDER BY play_count DESC
+        LIMIT 10
+      `);
+
+      // 3. Top artists
+      const topArtistsRes = await this.db.execute<{
+        artist: string;
+        play_count: number;
+      }>(sql`
+        SELECT
+          t.artist,
+          COUNT(*)::int AS play_count
+        FROM playback_events pe
+        JOIN tracks t ON pe.track_id = t.id
+        ${whereSql}
+        AND t.artist IS NOT NULL AND TRIM(t.artist) != ''
+        GROUP BY t.artist
+        ORDER BY play_count DESC
+        LIMIT 10
+      `);
+
+      // 4. Top listeners (only if guild view without specific user isolation)
+      let topListeners: Array<{ userId: string; playCount: number; durationSeconds: number }> | undefined;
+      if (!options.userId && options.guildId) {
+        const topListenersRes = await this.db.execute<{
+          user_id: string;
+          play_count: number;
+          duration_seconds: number;
+        }>(sql`
+          SELECT
+            pe.user_id,
+            COUNT(*)::int AS play_count,
+            COALESCE(SUM(pe.duration_listened), 0)::int AS duration_seconds
+          FROM playback_events pe
+          ${whereSql}
+          AND pe.user_id IS NOT NULL AND TRIM(pe.user_id) != ''
+          GROUP BY pe.user_id
+          ORDER BY play_count DESC
+          LIMIT 10
+        `);
+        topListeners = topListenersRes.rows.map((r) => ({
+          userId: r.user_id,
+          playCount: Number(r.play_count),
+          durationSeconds: Number(r.duration_seconds),
+        }));
+      }
+
+      const mappedTopTracks = topTracksRes.rows.map((r) => ({
+        trackId: r.track_id,
+        title: r.title,
+        artist: r.artist,
+        playCount: Number(r.play_count),
+        duration: r.duration ? Number(r.duration) : null,
+      }));
+
+      const mappedTopArtists = topArtistsRes.rows.map((r) => ({
+        artist: r.artist,
+        playCount: Number(r.play_count),
+      }));
+
+      return {
+        totalPlays,
+        totalListeningSeconds: Number(overview.total_listening_seconds),
+        completionRate,
+        skipRate,
+        topTracks: mappedTopTracks,
+        mostPlayedTracks: mappedTopTracks,
+        topArtists: mappedTopArtists,
+        topListeners,
+        mostActiveListeners: topListeners || [],
+        timeRange,
+      };
+    } catch (err) {
+      this.logger.error({ err, options }, 'Failed to compute dashboard stats');
+      return {
+        totalPlays: 0,
+        totalListeningSeconds: 0,
+        completionRate: 0,
+        skipRate: 0,
+        topTracks: [],
+        mostPlayedTracks: [],
+        topArtists: [],
+        topListeners: [],
+        mostActiveListeners: [],
+        timeRange,
       };
     }
   }

@@ -146,5 +146,70 @@ export function queueRoutes(playbackManager?: PlaybackManager): Router {
     });
   });
 
+  /**
+   * POST /api/queue/:guildId/reorder
+   * Reorder queued items from web drag-and-drop (Requirement 9 & 10).
+   * Body: { orderedTrackIds: string[] }
+   */
+  router.post('/:guildId/reorder', (req, res) => {
+    const { guildId } = req.params;
+    const { orderedTrackIds } = req.body;
+
+    if (!Array.isArray(orderedTrackIds)) {
+      res.status(400).json({ error: 'Body must include "orderedTrackIds" array.' });
+      return;
+    }
+
+    if (!playbackManager) {
+      res.status(503).json({ error: 'Playback manager not initialized.' });
+      return;
+    }
+
+    playbackManager.queueManager.reorderQueue(guildId, orderedTrackIds);
+    const authoritativeEvent = playbackManager.getQueueEvent(guildId);
+    res.json(authoritativeEvent);
+  });
+
+  /**
+   * POST /api/queue/:guildId/move
+   * Targeted queue actions: move to top, bottom, play next, up, down (Requirement 9 & 24).
+   * Body: { trackId: string, action: 'top' | 'bottom' | 'next' | 'up' | 'down' }
+   */
+  router.post('/:guildId/move', (req, res) => {
+    const { guildId } = req.params;
+    const { trackId, action } = req.body;
+
+    if (!trackId || !action) {
+      res.status(400).json({ error: 'trackId and action are required.' });
+      return;
+    }
+
+    if (!playbackManager) {
+      res.status(503).json({ error: 'Playback manager not initialized.' });
+      return;
+    }
+
+    const currentTracks = playbackManager.queueManager.inspectQueue(guildId);
+    const currentIndex = currentTracks.findIndex((t) => t.id === trackId);
+
+    if (currentIndex === -1) {
+      res.status(404).json({ error: 'Track not found in queue.' });
+      return;
+    }
+
+    if (action === 'top' || action === 'next') {
+      playbackManager.queueManager.moveToTop(guildId, trackId);
+    } else if (action === 'bottom') {
+      playbackManager.queueManager.moveToBottom(guildId, trackId);
+    } else if (action === 'up' && currentIndex > 0) {
+      playbackManager.queueManager.moveTrack(guildId, currentIndex + 1, currentIndex, true);
+    } else if (action === 'down' && currentIndex < currentTracks.length - 1) {
+      playbackManager.queueManager.moveTrack(guildId, currentIndex + 1, currentIndex + 2, true);
+    }
+
+    const authoritativeEvent = playbackManager.getQueueEvent(guildId);
+    res.json(authoritativeEvent);
+  });
+
   return router;
 }

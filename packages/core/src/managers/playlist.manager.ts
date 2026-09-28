@@ -720,4 +720,143 @@ export class PlaylistManager {
       return false;
     }
   }
+
+  /**
+   * Batch reorder playlist tracks in a single authoritative operation (Requirement 8).
+   * @param playlistId - ID of playlist
+   * @param orderedItemIds - Array of playlist_tracks IDs in new desired order
+   */
+  async reorderTracksBatch(
+    playlistId: string,
+    orderedItemIds: string[],
+    userId?: string
+  ): Promise<PlaylistTrack[]> {
+    if (!orderedItemIds || orderedItemIds.length === 0) {
+      const res = await this.getPlaylist(playlistId);
+      return res ? res.tracks : [];
+    }
+
+    if (!this.db) {
+      const p = this.inMemoryPlaylists.get(playlistId);
+      if (!p) throw new PlaylistNotFoundError(playlistId);
+      if (p.ownerUserId && userId && p.ownerUserId !== userId) {
+        throw new PlaylistPermissionError();
+      }
+
+      const tracks = this.inMemoryTracks.get(playlistId) || [];
+      const trackMap = new Map<string, PlaylistTrack>();
+      for (const t of tracks) {
+        if (t.id) trackMap.set(t.id, t);
+        if (t.trackId) trackMap.set(t.trackId, t);
+      }
+      const reordered: PlaylistTrack[] = [];
+
+      for (let i = 0; i < orderedItemIds.length; i++) {
+        const item = trackMap.get(orderedItemIds[i]);
+        if (item && !reordered.some((r) => r.trackId === item.trackId)) {
+          item.position = i + 1;
+          reordered.push(item);
+        }
+      }
+
+      // Add any leftover items not in the list
+      for (const t of tracks) {
+        if (!reordered.some((r) => r.trackId === t.trackId)) {
+          t.position = reordered.length + 1;
+          reordered.push(t);
+        }
+      }
+
+      this.inMemoryTracks.set(playlistId, reordered);
+      return reordered;
+    }
+
+    // Verify permission
+    const existing = await this.db
+      .select()
+      .from(schema.playlists)
+      .where(eq(schema.playlists.id, playlistId))
+      .limit(1);
+
+    if (existing.length === 0) {
+      throw new PlaylistNotFoundError(playlistId);
+    }
+
+    const p = existing[0];
+    if (p.ownerUserId && userId && p.ownerUserId !== userId) {
+      throw new PlaylistPermissionError();
+    }
+
+    try {
+      // Execute batch reorder in a single atomic operation
+      for (let i = 0; i < orderedItemIds.length; i++) {
+        await this.db.execute(sql`
+          UPDATE playlist_tracks
+          SET position = ${i + 1}
+          WHERE playlist_id = ${playlistId}::uuid
+            AND (id::text = ${orderedItemIds[i]} OR track_id::text = ${orderedItemIds[i]})
+        `);
+      }
+
+      await this.db
+        .update(schema.playlists)
+        .set({ updatedAt: new Date() })
+        .where(eq(schema.playlists.id, playlistId));
+
+      const updated = await this.getPlaylist(playlistId);
+      return updated ? updated.tracks : [];
+    } catch (err) {
+      this.logger.error({ err, playlistId }, 'Failed to batch reorder playlist tracks');
+      throw err;
+    }
+  }
+
+  /**
+   * Duplicate an existing playlist and all its tracks (Requirement 7).
+   */
+  async duplicatePlaylist(
+    playlistId: string,
+    arg2: string,
+    arg3?: string
+  ): Promise<Playlist> {
+    let newName = arg2;
+    let userId = arg3;
+
+    // Handle flexible argument order: (id, name, userId) vs (id, userId, name)
+    if (arg3) {
+      if (arg3.includes(' ') || arg3.length > arg2.length) {
+        newName = arg3;
+        userId = arg2;
+      }
+    }
+
+    const trimmed = newName.trim();
+    if (!trimmed) {
+      throw new Error('New playlist name cannot be empty');
+    }
+
+    const original = await this.getPlaylist(playlistId);
+    if (!original) {
+      throw new PlaylistNotFoundError(playlistId);
+    }
+
+    // Create new playlist
+    const newPlaylist = await this.createPlaylist({
+      name: trimmed,
+      description: original.playlist.description
+        ? `Copy of ${original.playlist.name}: ${original.playlist.description}`
+        : `Copy of ${original.playlist.name}`,
+      ownerUserId: userId || original.playlist.ownerUserId || undefined,
+      guildId: original.playlist.guildId || undefined,
+      visibility: original.playlist.visibility,
+    });
+
+    // Copy all tracks
+    for (const item of original.tracks) {
+      await this.addTrackToPlaylist(newPlaylist.id, item.trackId, userId || item.addedBy || undefined);
+    }
+
+    newPlaylist.trackCount = original.tracks.length;
+    return newPlaylist;
+  }
 }

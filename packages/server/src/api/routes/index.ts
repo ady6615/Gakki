@@ -7,6 +7,9 @@ import type {
   PlaylistManager,
   TrackManager,
   AiRecommendationManager,
+  LyricsManager,
+  FavoritesManager,
+  LibraryManager,
 } from '@gakki/core';
 import { healthRoutes } from './health.routes';
 import { playbackRoutes } from './playback.routes';
@@ -18,6 +21,10 @@ import { playlistRoutes } from './playlist.routes';
 import { recommendationRoutes } from './recommendation.routes';
 import { transitionRoutes } from './transition.routes';
 import { stemRoutes } from './stem.routes';
+import { lyricsRoutes } from './lyrics.routes';
+import { favoritesRoutes } from './favorites.routes';
+import { libraryRoutes } from './library.routes';
+import { analyticsRoutes } from './analytics.routes';
 import { ArtworkService } from '../../services/artwork.service';
 
 /**
@@ -32,6 +39,9 @@ export function createRoutes(
   playlistManager?: PlaylistManager,
   trackManager?: TrackManager,
   recManager?: AiRecommendationManager,
+  lyricsManager?: LyricsManager,
+  favoritesManager?: FavoritesManager,
+  libraryManager?: LibraryManager,
 ): Router {
   const router = Router();
 
@@ -53,6 +63,10 @@ export function createRoutes(
   router.use('/recommendations', recommendationRoutes(recManager, activePlaybackManager));
   router.use('/guilds', transitionRoutes(activePlaybackManager));
   router.use('/stems', stemRoutes(activePlaybackManager, trackManager));
+  router.use('/lyrics', lyricsRoutes(lyricsManager));
+  router.use('/favorites', favoritesRoutes(favoritesManager));
+  router.use('/library', libraryRoutes(libraryManager));
+  router.use('/analytics', analyticsRoutes(analyticsManager));
 
   return router;
 }

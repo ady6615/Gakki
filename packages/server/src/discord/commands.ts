@@ -18,6 +18,8 @@ import type {
   TrackManager,
   AiRecommendationManager,
   DJProfile,
+  LyricsManager,
+  FavoritesManager,
 } from '@gakki/core';
 import {
   LocalAudioSource,
@@ -33,6 +35,8 @@ import { createConfiguredAudioSourceManager } from '../sources';
 import { getFFmpegCapabilities } from '../audio/ffmpeg-capabilities';
 import { StemWorkerPool } from '../audio/stems/stem-worker-pool';
 import { StemProviderRegistry } from '../audio/stems/stem-provider.registry';
+import { checkCommandPermission, CommandPermissionLevel } from './permissions';
+import { BotErrors, formatUserFacingError } from './errors';
 
 const logger = createLogger('discord-commands');
 
@@ -168,6 +172,31 @@ export const slashCommandDefinitions = [
         .setDescription('Rename an existing playlist')
         .addStringOption((opt) =>
           opt.setName('name').setDescription('Current playlist name').setRequired(true).setAutocomplete(true),
+        )
+        .addStringOption((opt) =>
+          opt.setName('new_name').setDescription('New playlist name').setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('reorder')
+        .setDescription('Reorder a track within a playlist')
+        .addStringOption((opt) =>
+          opt.setName('name').setDescription('Playlist name').setRequired(true).setAutocomplete(true),
+        )
+        .addIntegerOption((opt) =>
+          opt.setName('from').setDescription('Current track position (1-based)').setRequired(true).setMinValue(1),
+        )
+        .addIntegerOption((opt) =>
+          opt.setName('to').setDescription('Target track position (1-based)').setRequired(true).setMinValue(1),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('duplicate')
+        .setDescription('Duplicate an existing playlist')
+        .addStringOption((opt) =>
+          opt.setName('name').setDescription('Source playlist name').setRequired(true).setAutocomplete(true),
         )
         .addStringOption((opt) =>
           opt.setName('new_name').setDescription('New playlist name').setRequired(true),
@@ -517,6 +546,64 @@ export const slashCommandDefinitions = [
         .setName('status')
         .setDescription('View current transition settings and upcoming transition preview'),
     ),
+
+  new SlashCommandBuilder()
+    .setName('lyrics')
+    .setDescription('Display plain or synchronized lyrics for current or specified track')
+    .addStringOption((option) =>
+      option
+        .setName('track')
+        .setDescription('Track title / artist to look up (uses current track if omitted)')
+        .setRequired(false),
+    ),
+
+  new SlashCommandBuilder()
+    .setName('favorite')
+    .setDescription('Save the current or specified track to your personal favorites')
+    .addStringOption((option) =>
+      option
+        .setName('track')
+        .setDescription('Track name or search query (uses currently playing track if omitted)')
+        .setRequired(false),
+    ),
+
+  new SlashCommandBuilder()
+    .setName('unfavorite')
+    .setDescription('Remove a track from your personal favorites')
+    .addStringOption((option) =>
+      option
+        .setName('track')
+        .setDescription('Track name or search query (uses currently playing track if omitted)')
+        .setRequired(false),
+    ),
+
+  new SlashCommandBuilder()
+    .setName('favorites')
+    .setDescription('View your personal favorite tracks')
+    .addIntegerOption((option) =>
+      option
+        .setName('page')
+        .setDescription('Page number')
+        .setRequired(false)
+        .setMinValue(1),
+    ),
+
+  new SlashCommandBuilder()
+    .setName('help')
+    .setDescription('Show organized command guide and platform instructions')
+    .addStringOption((option) =>
+      option
+        .setName('category')
+        .setDescription('Filter by category')
+        .setRequired(false)
+        .addChoices(
+          { name: '🎵 Playback', value: 'playback' },
+          { name: '📑 Playlists', value: 'playlists' },
+          { name: '🎛️ DJ & Transitions', value: 'dj' },
+          { name: '📚 Library & Lyrics', value: 'library' },
+          { name: '⚙️ Settings', value: 'settings' },
+        ),
+    ),
 ];
 
 /**
@@ -588,6 +675,8 @@ export async function handleChatInputCommand(
   playlistManager?: PlaylistManager,
   trackManager?: TrackManager,
   recManager?: AiRecommendationManager,
+  lyricsManager?: LyricsManager,
+  favoritesManager?: FavoritesManager,
 ): Promise<void> {
   const playbackManager: PlaybackManager =
     'playbackManager' in manager
@@ -1546,6 +1635,49 @@ export async function handleChatInputCommand(
           break;
         }
 
+        case 'reorder': {
+          const name = interaction.options.getString('name', true);
+          const from = interaction.options.getInteger('from', true);
+          const to = interaction.options.getInteger('to', true);
+
+          const playlist = await playlistManager.findPlaylistByName(name, { guildId, userId });
+          if (!playlist) {
+            await interaction.reply({ content: `Playlist **${name}** not found.`, ephemeral: true });
+            return;
+          }
+
+          try {
+            const reordered = await playlistManager.reorderPlaylistTrack(playlist.id, from, to);
+            if (reordered) {
+              await interaction.reply(`🔀 Reordered track in **${playlist.name}** from #${from} to #${to}`);
+            } else {
+              await interaction.reply({ content: `Could not reorder track in playlist. Please verify positions.`, ephemeral: true });
+            }
+          } catch (err: any) {
+            await interaction.reply({ content: `Failed to reorder track: ${err.message}`, ephemeral: true });
+          }
+          break;
+        }
+
+        case 'duplicate': {
+          const name = interaction.options.getString('name', true);
+          const newName = interaction.options.getString('new_name', true);
+
+          const playlist = await playlistManager.findPlaylistByName(name, { guildId, userId });
+          if (!playlist) {
+            await interaction.reply({ content: `Playlist **${name}** not found.`, ephemeral: true });
+            return;
+          }
+
+          try {
+            const copy = await playlistManager.duplicatePlaylist(playlist.id, newName, userId);
+            await interaction.reply(`📑 Successfully duplicated playlist **${playlist.name}** as **${copy.name}** with **${copy.trackCount}** tracks!`);
+          } catch (err: any) {
+            await interaction.reply({ content: `Failed to duplicate playlist: ${err.message}`, ephemeral: true });
+          }
+          break;
+        }
+
         case 'delete': {
           const name = interaction.options.getString('name', true);
           const playlist = await playlistManager.findPlaylistByName(name, { guildId, userId });
@@ -1838,6 +1970,267 @@ export async function handleChatInputCommand(
 
         await interaction.reply({ embeds: [embed] });
       }
+      break;
+    }
+
+    case 'lyrics': {
+      await interaction.deferReply();
+      const trackQuery = interaction.options.getString('track');
+      let targetTrack: { title: string; artist?: string | null; album?: string | null; duration?: number | null; id?: string } | null = null;
+
+      if (trackQuery) {
+        targetTrack = { title: trackQuery };
+      } else {
+        const current = playbackManager.getCurrentTrack(guildId);
+        if (!current) {
+          await interaction.editReply('⚠️ No track is currently playing. Specify a track name or play a song first.');
+          return;
+        }
+        targetTrack = {
+          title: current.name,
+          artist: current.artist,
+          album: current.album,
+          duration: current.duration,
+          id: current.trackId,
+        };
+      }
+
+      if (!lyricsManager) {
+        await interaction.editReply('⚠️ Lyrics service is not available.');
+        return;
+      }
+
+      try {
+        const result = await lyricsManager.getLyrics(targetTrack, targetTrack.id);
+        if (!result || !result.plainLyrics) {
+          await interaction.editReply('⚠️ Lyrics unavailable.');
+          return;
+        }
+
+        const { excerpt, isTruncated } = lyricsManager.formatLyricsExcerpt(result.plainLyrics, 1800);
+        const embed = new EmbedBuilder()
+          .setTitle(`🎶 Lyrics: ${targetTrack.title}${targetTrack.artist ? ` — ${targetTrack.artist}` : ''}`)
+          .setDescription(excerpt)
+          .setColor(0x3498db)
+          .setFooter({
+            text: `Provider: ${result.providerName.toUpperCase()} • Confidence: ${(result.confidence * 100).toFixed(0)}%${result.isSynced ? ' • ⏱️ Synced Lyrics Available on Web Dashboard' : ''}`,
+          });
+
+        if (isTruncated) {
+          embed.addFields({
+            name: 'Web Dashboard',
+            value: 'Full unsynced and synchronized lyrics are available on the [Web Dashboard](http://localhost:3000).',
+          });
+        }
+
+        await interaction.editReply({ embeds: [embed] });
+      } catch (err: any) {
+        logger.error({ err, targetTrack }, 'Failed to fetch lyrics in Discord command');
+        await interaction.editReply('❌ Failed to retrieve lyrics for this track.');
+      }
+      break;
+    }
+
+    case 'favorite': {
+      const trackQuery = interaction.options.getString('track');
+      let targetTrackId: string | null = null;
+      let targetTitle: string = '';
+
+      if (trackQuery) {
+        if (trackManager) {
+          const found = await trackManager.search(trackQuery, 1);
+          if (found.length > 0) {
+            targetTrackId = found[0].id;
+            targetTitle = found[0].title;
+          }
+        }
+      } else {
+        const current = playbackManager.getCurrentTrack(guildId);
+        if (current && current.trackId) {
+          targetTrackId = current.trackId;
+          targetTitle = current.name;
+        }
+      }
+
+      if (!targetTrackId) {
+        await interaction.reply({
+          content: '⚠️ No track specified and nothing is currently playing to favorite.',
+          ephemeral: true,
+        });
+        return;
+      }
+
+      if (!favoritesManager) {
+        await interaction.reply({ content: '⚠️ Favorites service is currently unavailable.', ephemeral: true });
+        return;
+      }
+
+      try {
+        await favoritesManager.addFavorite(interaction.user.id, targetTrackId);
+        await interaction.reply(`⭐ Added **${targetTitle}** to your favorites! View your collection with \`/favorites\`.`);
+      } catch (err: any) {
+        await interaction.reply({ content: `❌ Failed to favorite track: ${err.message}`, ephemeral: true });
+      }
+      break;
+    }
+
+    case 'unfavorite': {
+      const trackQuery = interaction.options.getString('track');
+      let targetTrackId: string | null = null;
+      let targetTitle: string = '';
+
+      if (trackQuery) {
+        if (trackManager) {
+          const found = await trackManager.search(trackQuery, 1);
+          if (found.length > 0) {
+            targetTrackId = found[0].id;
+            targetTitle = found[0].title;
+          }
+        }
+      } else {
+        const current = playbackManager.getCurrentTrack(guildId);
+        if (current && current.trackId) {
+          targetTrackId = current.trackId;
+          targetTitle = current.name;
+        }
+      }
+
+      if (!targetTrackId) {
+        await interaction.reply({
+          content: '⚠️ No track specified and nothing is currently playing to unfavorite.',
+          ephemeral: true,
+        });
+        return;
+      }
+
+      if (!favoritesManager) {
+        await interaction.reply({ content: '⚠️ Favorites service is currently unavailable.', ephemeral: true });
+        return;
+      }
+
+      try {
+        await favoritesManager.removeFavorite(interaction.user.id, targetTrackId);
+        await interaction.reply(`🗑️ Removed **${targetTitle}** from your personal favorites.`);
+      } catch (err: any) {
+        await interaction.reply({ content: `❌ Failed to remove favorite: ${err.message}`, ephemeral: true });
+      }
+      break;
+    }
+
+    case 'favorites': {
+      if (!favoritesManager) {
+        await interaction.reply({ content: '⚠️ Favorites service is currently unavailable.', ephemeral: true });
+        return;
+      }
+
+      await interaction.deferReply();
+      const page = interaction.options.getInteger('page') || 1;
+      const limit = 10;
+
+      try {
+        const result = await favoritesManager.getFavorites(interaction.user.id, { page, limit });
+        if (result.items.length === 0) {
+          await interaction.editReply('⭐ You have no favorited tracks yet. Use `/favorite` to save songs you love!');
+          return;
+        }
+
+        const totalPages = Math.ceil(result.total / limit);
+        const listText = result.items
+          .map((fav, i) => {
+            const num = (page - 1) * limit + i + 1;
+            const dur = fav.track?.duration ? ` \`(${formatDuration(fav.track.duration)})\`` : '';
+            const artist = fav.track?.artist ? ` — *${fav.track.artist}*` : '';
+            return `**${num}.** ${fav.track?.title || 'Unknown Track'}${artist}${dur}`;
+          })
+          .join('\n');
+
+        const embed = new EmbedBuilder()
+          .setTitle(`⭐ Your Favorite Tracks (Page ${page}/${totalPages})`)
+          .setDescription(listText)
+          .setColor(0xf1c40f)
+          .setFooter({ text: `Total: ${result.total} favorites • Use /play with any title to listen` });
+
+        await interaction.editReply({ embeds: [embed] });
+      } catch (err: any) {
+        await interaction.editReply({ content: `❌ Failed to load favorites: ${err.message}` });
+      }
+      break;
+    }
+
+    case 'help': {
+      const category = interaction.options.getString('category');
+      const embed = new EmbedBuilder()
+        .setTitle('🎵 Gakki Music Platform — Command Guide')
+        .setColor(0x9b59b6)
+        .setFooter({ text: 'Gakki v0.10.0 • Web Dashboard: http://localhost:3000' });
+
+      if (!category || category === 'playback') {
+        embed.addFields({
+          name: '🎵 Playback',
+          value:
+            '`/play [input]` - Play local song, audio URL, or SoundCloud link\n' +
+            '`/pause` & `/resume` - Pause or unpause audio\n' +
+            '`/skip` - Skip to next track in queue\n' +
+            '`/queue` - View active queue and now playing track\n' +
+            '`/nowplaying` - Detailed view of current song\n' +
+            '`/leave` - Stop playback and leave voice channel',
+        });
+      }
+
+      if (!category || category === 'playlists') {
+        embed.addFields({
+          name: '📑 Playlists',
+          value:
+            '`/playlist list` - View your saved playlists\n' +
+            '`/playlist play <name>` - Queue an entire playlist\n' +
+            '`/playlist create <name>` - Create a new playlist\n' +
+            '`/playlist add <name> <track>` - Add track to playlist\n' +
+            '`/playlist remove <name> <index>` - Remove track by position\n' +
+            '`/playlist reorder <name> <from> <to>` - Move track position\n' +
+            '`/playlist duplicate <name> <new_name>` - Copy a playlist\n' +
+            '`/playlist rename <name> <new_name>` - Rename playlist',
+        });
+      }
+
+      if (!category || category === 'dj') {
+        embed.addFields({
+          name: '🎛️ DJ & Transitions',
+          value:
+            '`/dj on [profile]` - Enable dynamic AI DJ auto-selection\n' +
+            '`/dj off` - Disable dynamic DJ\n' +
+            '`/smartshuffle` - Flow-aware intelligent queue shuffle\n' +
+            '`/transition on/off` - Toggle seamless beat-aware crossfading\n' +
+            '`/transition profile <name>` - Set profile (Smooth/Balanced/Energetic)\n' +
+            '`/stems status` - View stem separation & vocal protection',
+        });
+      }
+
+      if (!category || category === 'library') {
+        embed.addFields({
+          name: '📚 Library & Lyrics',
+          value:
+            '`/search <query>` - Search songs across local library\n' +
+            '`/lyrics [track]` - Look up plain and synced song lyrics\n' +
+            '`/favorite [track]` - Add song to your personal favorites\n' +
+            '`/unfavorite [track]` - Remove song from your favorites\n' +
+            '`/favorites [page]` - List your saved favorite tracks\n' +
+            '`/history` & `/recent` - View recent playback log',
+        });
+      }
+
+      if (!category || category === 'settings') {
+        embed.addFields({
+          name: '⚙️ Audio Effects & Settings',
+          value:
+            '`/volume <level>` - Set volume level (0-200%)\n' +
+            '`/loop <mode>` - Set loop mode (off/track/queue)\n' +
+            '`/bassboost <on/off>` - Toggle low-end bass filter\n' +
+            '`/speed <value>` - Adjust playback speed (0.5x - 2.0x)\n' +
+            '`/nightcore <on/off>` - Toggle nightcore pitch shift',
+        });
+      }
+
+      await interaction.reply({ embeds: [embed] });
       break;
     }
 
