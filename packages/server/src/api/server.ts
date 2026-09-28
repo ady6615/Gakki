@@ -1,5 +1,7 @@
 import express from 'express';
 import http from 'node:http';
+import path from 'node:path';
+import fs from 'node:fs';
 import cors from 'cors';
 import type {
   AudioPlayerManager,
@@ -53,8 +55,30 @@ export function createApiServer(
     ),
   );
 
-  // Error handling (must be registered last)
+  // Error handling (must be registered last for API routes)
   app.use(errorHandler);
+
+  // ── Serve Web Dashboard (Vite build output) ───────────────────
+  // Try multiple possible paths for the web dist (works with both tsx dev and compiled JS)
+  const candidates = [
+    path.resolve(process.cwd(), 'packages', 'web', 'dist'),
+    path.resolve(__dirname, '..', '..', '..', '..', 'web', 'dist'),
+    path.resolve(__dirname, '..', '..', '..', 'web', 'dist'),
+  ];
+  const webDistPath = candidates.find(p => fs.existsSync(path.join(p, 'index.html'))) || candidates[0];
+  if (fs.existsSync(webDistPath)) {
+    app.use(express.static(webDistPath));
+    // SPA fallback: any non-API route serves index.html for client-side routing
+    app.get('*', (_req, res) => {
+      res.sendFile(path.join(webDistPath, 'index.html'));
+    });
+    logger.info({ webDistPath }, 'Serving web dashboard from static build');
+  } else {
+    app.get('/', (_req, res) => {
+      res.json({ status: 'ok', message: 'Gakki API running. Web dashboard not built yet — run: npm run build -w @gakki/web' });
+    });
+    logger.warn({ webDistPath }, 'Web dashboard dist not found — dashboard will not be served');
+  }
 
   const server = http.createServer(app);
 
