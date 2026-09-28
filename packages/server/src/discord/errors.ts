@@ -41,6 +41,9 @@ export const BotErrors = {
   INSUFFICIENT_PERMISSIONS: (requiredRole: string) =>
     new StandardBotError(`You do not have permission to perform this action (requires ${requiredRole} or higher).`, 'INSUFFICIENT_PERMISSIONS'),
   INVALID_POSITION: makeCallableError('The specified position is invalid for this queue or playlist.', 'INVALID_POSITION'),
+  RECORDING_NO_PERMISSION: makeCallableError('You do not have permission to operate voice recording (requires RECORDING_OPERATOR, MODERATOR, or ADMIN).', 'RECORDING_NO_PERMISSION'),
+  RECORDING_ALREADY_ACTIVE: makeCallableError('A voice recording is already in progress in this server.', 'RECORDING_ALREADY_ACTIVE', true),
+  NO_ACTIVE_RECORDING: makeCallableError('There is no active voice recording to stop in this server.', 'NO_ACTIVE_RECORDING', true),
 };
 
 /**

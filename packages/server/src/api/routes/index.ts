@@ -10,6 +10,8 @@ import type {
   LyricsManager,
   FavoritesManager,
   LibraryManager,
+  RecordingManager,
+  TranscriptionManager,
 } from '@gakki/core';
 import { healthRoutes } from './health.routes';
 import { playbackRoutes } from './playback.routes';
@@ -25,7 +27,9 @@ import { lyricsRoutes } from './lyrics.routes';
 import { favoritesRoutes } from './favorites.routes';
 import { libraryRoutes } from './library.routes';
 import { analyticsRoutes } from './analytics.routes';
+import { recordingRoutes } from './recording.routes';
 import { ArtworkService } from '../../services/artwork.service';
+import type { VoiceReceiverManager } from '../../voice';
 
 /**
  * Top-level API router.
@@ -42,6 +46,9 @@ export function createRoutes(
   lyricsManager?: LyricsManager,
   favoritesManager?: FavoritesManager,
   libraryManager?: LibraryManager,
+  recordingManager?: RecordingManager,
+  transcriptionManager?: TranscriptionManager,
+  voiceReceiver?: VoiceReceiverManager,
 ): Router {
   const router = Router();
 
@@ -67,6 +74,10 @@ export function createRoutes(
   router.use('/favorites', favoritesRoutes(favoritesManager));
   router.use('/library', libraryRoutes(libraryManager));
   router.use('/analytics', analyticsRoutes(analyticsManager));
+  router.use(
+    '/recordings',
+    recordingRoutes(recordingManager, transcriptionManager, voiceReceiver),
+  );
 
   return router;
 }

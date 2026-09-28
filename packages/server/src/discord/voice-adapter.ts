@@ -73,6 +73,10 @@ export class DiscordVoiceAdapter implements VoicePlatformAdapter {
     this.remoteStreamManager = remoteStreamManager;
   }
 
+  public getClient(): Client {
+    return this.client;
+  }
+
 
   /**
    * Join a voice channel in a guild and subscribe an audio player.
@@ -119,12 +123,12 @@ export class DiscordVoiceAdapter implements VoicePlatformAdapter {
       this.connections.delete(guildId);
     }
 
-    // Create voice connection
+    // Create voice connection with selfDeaf: false to receive incoming participant audio
     const connection = joinVoiceChannel({
       channelId,
       guildId,
       adapterCreator: guild.voiceAdapterCreator,
-      selfDeaf: true,
+      selfDeaf: false,
       selfMute: false,
     });
 
@@ -496,6 +500,14 @@ export class DiscordVoiceAdapter implements VoicePlatformAdapter {
 
   onTrackEnd(listener: (guildId: string) => void): void {
     this.trackEndListeners.add(listener);
+  }
+
+  getConnection(guildId: string): VoiceConnection | undefined {
+    return this.connections.get(guildId);
+  }
+
+  getChannelId(guildId: string): string | undefined {
+    return this.channelIds.get(guildId);
   }
 
   private getOrCreatePlayer(guildId: string): AudioPlayer {

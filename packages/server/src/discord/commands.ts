@@ -20,6 +20,7 @@ import type {
   DJProfile,
   LyricsManager,
   FavoritesManager,
+  RecordingManager,
 } from '@gakki/core';
 import {
   LocalAudioSource,
@@ -35,8 +36,9 @@ import { createConfiguredAudioSourceManager } from '../sources';
 import { getFFmpegCapabilities } from '../audio/ffmpeg-capabilities';
 import { StemWorkerPool } from '../audio/stems/stem-worker-pool';
 import { StemProviderRegistry } from '../audio/stems/stem-provider.registry';
-import { checkCommandPermission, CommandPermissionLevel } from './permissions';
+import { checkCommandPermission, checkRecordingPermission, CommandPermissionLevel } from './permissions';
 import { BotErrors, formatUserFacingError } from './errors';
+import type { VoiceReceiverManager } from '../voice/voice-receiver';
 
 const logger = createLogger('discord-commands');
 
@@ -589,6 +591,50 @@ export const slashCommandDefinitions = [
     ),
 
   new SlashCommandBuilder()
+    .setName('record')
+    .setDescription('Voice recording operations')
+    .addSubcommand((sub) =>
+      sub
+        .setName('start')
+        .setDescription('Begin voice recording in current voice channel')
+        .addStringOption((opt) =>
+          opt.setName('title').setDescription('Optional meeting / session title').setRequired(false)
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('visibility')
+            .setDescription('Who can view/access recording')
+            .setRequired(false)
+            .addChoices(
+              { name: 'Server (Guild members)', value: 'GUILD' },
+              { name: 'Private (Operators only)', value: 'PRIVATE' }
+            )
+        )
+    )
+    .addSubcommand((sub) => sub.setName('stop').setDescription('Stop current voice recording'))
+    .addSubcommand((sub) => sub.setName('status').setDescription('View current voice recording status')),
+
+  new SlashCommandBuilder()
+    .setName('recordings')
+    .setDescription('Browse and manage recorded voice sessions')
+    .addSubcommand((sub) =>
+      sub
+        .setName('list')
+        .setDescription('List recent voice recordings')
+        .addIntegerOption((opt) =>
+          opt.setName('limit').setDescription('Number of records to show').setRequired(false).setMinValue(1).setMaxValue(20)
+        )
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('delete')
+        .setDescription('Delete a recording session and audio files')
+        .addStringOption((opt) =>
+          opt.setName('id').setDescription('Recording session UUID').setRequired(true)
+        )
+    ),
+
+  new SlashCommandBuilder()
     .setName('help')
     .setDescription('Show organized command guide and platform instructions')
     .addStringOption((option) =>
@@ -601,6 +647,7 @@ export const slashCommandDefinitions = [
           { name: '📑 Playlists', value: 'playlists' },
           { name: '🎛️ DJ & Transitions', value: 'dj' },
           { name: '📚 Library & Lyrics', value: 'library' },
+          { name: '🎙️ Voice Recording', value: 'recording' },
           { name: '⚙️ Settings', value: 'settings' },
         ),
     ),
@@ -677,6 +724,8 @@ export async function handleChatInputCommand(
   recManager?: AiRecommendationManager,
   lyricsManager?: LyricsManager,
   favoritesManager?: FavoritesManager,
+  recordingManager?: RecordingManager,
+  voiceReceiver?: VoiceReceiverManager,
 ): Promise<void> {
   const playbackManager: PlaybackManager =
     'playbackManager' in manager
@@ -2218,6 +2267,18 @@ export async function handleChatInputCommand(
         });
       }
 
+      if (!category || category === 'recording') {
+        embed.addFields({
+          name: '🎙️ Voice Recording & Transcripts',
+          value:
+            '`/record start [title] [visibility]` - Begin recording with participant isolation\n' +
+            '`/record stop` - Finalize audio, mix tracks & trigger async transcription\n' +
+            '`/record status` - Check current live recording status\n' +
+            '`/recordings list [limit]` - Browse saved recordings\n' +
+            '`/recordings delete <id>` - Permanently delete recording session & audio',
+        });
+      }
+
       if (!category || category === 'settings') {
         embed.addFields({
           name: '⚙️ Audio Effects & Settings',
@@ -2231,6 +2292,199 @@ export async function handleChatInputCommand(
       }
 
       await interaction.reply({ embeds: [embed] });
+      break;
+    }
+
+    case 'record': {
+      if (!recordingManager || !voiceReceiver) {
+        await interaction.reply({
+          content: 'Voice recording service is not initialized on this bot instance.',
+          ephemeral: true,
+        });
+        return;
+      }
+
+      // Check recording permission (Requirement 5)
+      const perm = checkRecordingPermission(interaction);
+      if (!perm.allowed) {
+        await interaction.reply({
+          content: BotErrors.RECORDING_NO_PERMISSION().toString(),
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const sub = interaction.options.getSubcommand();
+
+      if (sub === 'start') {
+        if (!userVoiceChannel) {
+          await interaction.reply({
+            content: '❌ You must be connected to a voice channel to start recording.',
+            ephemeral: true,
+          });
+          return;
+        }
+
+        if (voiceReceiver.isRecording(guildId)) {
+          await interaction.reply({
+            content: BotErrors.RECORDING_ALREADY_ACTIVE().toString(),
+            ephemeral: true,
+          });
+          return;
+        }
+
+        const title = interaction.options.getString('title') || undefined;
+        const visibility = (interaction.options.getString('visibility') as any) || 'GUILD';
+
+        await interaction.deferReply();
+
+        try {
+          const session = await voiceReceiver.startRecording(guildId, {
+            channelId: userVoiceChannel.id,
+            startedBy: interaction.user.id,
+            title,
+            visibility,
+          });
+
+          const embed = new EmbedBuilder()
+            .setTitle('🔴 VOICE RECORDING STARTED')
+            .setColor(0xe74c3c)
+            .setDescription(
+              `**Notice:** Recording is active in <#${userVoiceChannel.id}>.\n\n` +
+              `• **Session ID:** \`${session.id}\`\n` +
+              `• **Title:** ${session.title}\n` +
+              `• **Started By:** <@${interaction.user.id}>\n` +
+              `• **Visibility:** \`${visibility}\`\n\n` +
+              `Participant audio will be captured and transcribed.\n` +
+              `Use \`/record stop\` when finished.`
+            )
+            .setTimestamp();
+
+          await interaction.editReply({ embeds: [embed] });
+        } catch (err: any) {
+          await interaction.editReply(`❌ Failed to start recording: ${err.message}`);
+        }
+      } else if (sub === 'stop') {
+        if (!voiceReceiver.isRecording(guildId)) {
+          await interaction.reply({
+            content: BotErrors.NO_ACTIVE_RECORDING().toString(),
+            ephemeral: true,
+          });
+          return;
+        }
+
+        await interaction.deferReply();
+
+        try {
+          const result = await voiceReceiver.stopRecording(guildId, interaction.user.id);
+          const mm = Math.floor(result.durationSeconds / 60);
+          const ss = result.durationSeconds % 60;
+          const durationStr = `${mm}m ${ss}s`;
+
+          const embed = new EmbedBuilder()
+            .setTitle('⏹️ VOICE RECORDING STOPPED')
+            .setColor(0x2ecc71)
+            .setDescription(
+              `Recording finalized and saved to secure storage.\n\n` +
+              `• **Duration:** \`${durationStr}\`\n` +
+              `• **Participants:** \`${result.participantCount}\`\n` +
+              `• **Format:** \`16-bit 48kHz WAV\`\n` +
+              `• **Transcription:** \`Processing started (async)\`\n\n` +
+              `Listen, seek, and view clickable transcript on the Web Dashboard: **http://localhost:3000**`
+            )
+            .setTimestamp();
+
+          await interaction.editReply({ embeds: [embed] });
+        } catch (err: any) {
+          await interaction.editReply(`❌ Failed to stop recording: ${err.message}`);
+        }
+      } else if (sub === 'status') {
+        const active = await voiceReceiver.getActiveRecording(guildId);
+        if (!active || active.status !== 'RECORDING') {
+          await interaction.reply({
+            content: '⚪ **Voice Recording:** IDLE (no active recording in this server)',
+            ephemeral: true,
+          });
+          return;
+        }
+
+        const mm = Math.floor((active.duration || 0) / 60).toString().padStart(2, '0');
+        const ss = ((active.duration || 0) % 60).toString().padStart(2, '0');
+
+        const embed = new EmbedBuilder()
+          .setTitle('🔴 VOICE RECORDING IN PROGRESS')
+          .setColor(0xe74c3c)
+          .setDescription(
+            `• **Elapsed:** \`${mm}:${ss}\`\n` +
+            `• **Channel:** <#${active.voiceChannelId}>\n` +
+            `• **Started By:** <@${active.startedBy}>\n` +
+            `• **Participants:** \`${active.participants.length}\`\n` +
+            `• **Session ID:** \`${active.id}\``
+          );
+
+        await interaction.reply({ embeds: [embed] });
+      }
+      break;
+    }
+
+    case 'recordings': {
+      if (!recordingManager) {
+        await interaction.reply({ content: 'Recording service not available.', ephemeral: true });
+        return;
+      }
+
+      const sub = interaction.options.getSubcommand();
+
+      if (sub === 'list') {
+        await interaction.deferReply();
+        const limit = interaction.options.getInteger('limit') || 10;
+        const sessions = await recordingManager.listSessions({ guildId, limit });
+
+        if (sessions.length === 0) {
+          await interaction.editReply('📁 No recordings found for this server.');
+          return;
+        }
+
+        const embed = new EmbedBuilder()
+          .setTitle('📁 Server Voice Recordings')
+          .setColor(0x3498db)
+          .setDescription(
+            sessions
+              .map((s, idx) => {
+                const mins = Math.floor(s.duration / 60);
+                const secs = s.duration % 60;
+                const statusEmoji = s.status === 'COMPLETED' ? '✅' : s.status === 'RECORDING' ? '🔴' : '⏳';
+                return `**${idx + 1}. ${s.title || 'Session'}** ${statusEmoji}\n   └ ID: \`${s.id}\` • ${mins}m ${secs}s • ${s.participants.length} participants • ${new Date(s.startedAt).toLocaleDateString()}`;
+              })
+              .join('\n\n')
+          )
+          .setFooter({ text: 'Access audio player & full transcript search at http://localhost:3000' });
+
+        await interaction.editReply({ embeds: [embed] });
+      } else if (sub === 'delete') {
+        const perm = checkRecordingPermission(interaction);
+        if (!perm.allowed) {
+          await interaction.reply({
+            content: BotErrors.RECORDING_NO_PERMISSION().toString(),
+            ephemeral: true,
+          });
+          return;
+        }
+
+        const targetId = interaction.options.getString('id', true);
+        await interaction.deferReply();
+
+        try {
+          const deleted = await recordingManager.deleteSession(targetId, interaction.user.id);
+          if (deleted) {
+            await interaction.editReply(`🗑️ Recording \`${targetId}\` and all associated audio files & transcripts were permanently deleted.`);
+          } else {
+            await interaction.editReply(`❌ Recording \`${targetId}\` was not found.`);
+          }
+        } catch (err: any) {
+          await interaction.editReply(`❌ Failed to delete recording: ${err.message}`);
+        }
+      }
       break;
     }
 

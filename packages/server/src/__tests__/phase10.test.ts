@@ -404,6 +404,7 @@ async function runPhase10Tests() {
       };
     }
     async getSession(): Promise<any> { return null; }
+    async getActiveSession(): Promise<any> { return null; }
     async listSessions(): Promise<any> { return []; }
     async deleteSession(): Promise<any> { return true; }
   }

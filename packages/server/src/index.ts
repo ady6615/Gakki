@@ -17,6 +17,11 @@ import {
   LyricsManager,
   FavoritesManager,
   LibraryManager,
+  RecordingManager,
+  TranscriptionManager,
+  TranscriptionProviderRegistry,
+  MockTranscriptionProvider,
+  WhisperLocalProvider,
 } from '@gakki/core';
 import { createApiServer } from './api/server';
 import { createDiscordBot, DiscordVoiceAdapter } from './discord';
@@ -28,6 +33,7 @@ import { detectFFmpegCapabilities } from './audio/ffmpeg-capabilities';
 import { TransitionProcessor } from './audio/transition-processor';
 import { StemProviderRegistry } from './audio/stems/stem-provider.registry';
 import { StemWorkerPool } from './audio/stems/stem-worker-pool';
+import { VoiceReceiverManager } from './voice';
 
 const logger = createLogger('main');
 
@@ -224,6 +230,27 @@ async function main(): Promise<void> {
   const favoritesManager = dbPool ? new FavoritesManager(dbPool) : undefined;
   const libraryManager = dbPool ? new LibraryManager(dbPool, recManager.featureManager, recManager) : undefined;
 
+  // ── Phase 11: Voice Recording & Transcription Subsystem ─────────
+  const recordingManager = dbPool ? new RecordingManager(dbPool) : undefined;
+  if (recordingManager) {
+    await recordingManager.cleanOrphanedRecordings();
+  }
+
+  const transcriptionRegistry = new TranscriptionProviderRegistry();
+  const transcriptionManager = dbPool
+    ? new TranscriptionManager(dbPool, transcriptionRegistry, {
+        defaultProvider: 'whisper-local',
+        maxConcurrentJobs: 2,
+      })
+    : undefined;
+
+  const voiceReceiver = new VoiceReceiverManager(
+    undefined,
+    recordingManager as any,
+    transcriptionManager,
+    (event: any) => broadcastEvent(event),
+  );
+
   // ── API Server ─────────────────────────────────────────────────
   const { server } = createApiServer(
     config.API_PORT,
@@ -237,6 +264,9 @@ async function main(): Promise<void> {
     lyricsManager,
     favoritesManager,
     libraryManager,
+    recordingManager,
+    transcriptionManager,
+    voiceReceiver,
   );
 
   // ── WebSocket ──────────────────────────────────────────────────
@@ -257,9 +287,12 @@ async function main(): Promise<void> {
         recManager,
         lyricsManager,
         favoritesManager,
+        recordingManager,
+        voiceReceiver,
       );
       const voiceAdapter = new DiscordVoiceAdapter(discordClient);
       playbackManager.registerAdapter(voiceAdapter);
+      voiceReceiver.setVoiceAdapter(voiceAdapter);
       discordConnected = true;
     } catch (error) {
       logger.error({ err: error }, 'Failed to start Discord bot — continuing without Discord');
@@ -276,8 +309,10 @@ async function main(): Promise<void> {
       api: `http://localhost:${config.API_PORT}`,
       ws: `ws://localhost:${config.API_PORT}/ws`,
       analyzer: config.AUDIO_ANALYZER_URL,
+      recording: 'active',
+      transcription: transcriptionRegistry.getAvailableProviders().join(', '),
     },
-    'Gakki Phase 7 startup complete',
+    'Gakki Phase 11 startup complete',
   );
 
   // ── Graceful Shutdown ─────────────────────────────────────────
@@ -288,18 +323,21 @@ async function main(): Promise<void> {
     logger.info({ signal }, 'Graceful shutdown initiated...');
 
     try {
-      // 1. Finalize active playback events
+      // 1. Finalize active recording sessions
+      await voiceReceiver.shutdown();
+
+      // 2. Finalize active playback events
       await playbackManager.shutdown();
 
-      // 2. Close HTTP/API and WebSocket server
+      // 3. Close HTTP/API and WebSocket server
       server.close();
 
-      // 3. Close Discord bot connection
+      // 4. Close Discord bot connection
       if (discordClient) {
         discordClient.destroy();
       }
 
-      // 4. Close database pool
+      // 5. Close database pool
       await disconnectDatabase();
       logger.info('Graceful shutdown completed successfully');
     } catch (err) {

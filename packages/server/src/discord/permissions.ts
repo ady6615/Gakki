@@ -82,3 +82,36 @@ export function checkCommandPermission(
     userLevel,
   };
 }
+
+/**
+ * Dedicated permission check for voice recording operations (Requirement 5).
+ * Requires RECORDING_OPERATOR role, MODERATOR, ADMIN, or OWNER.
+ */
+export function checkRecordingPermission(
+  interaction: CommandInteraction,
+  botOwnerId?: string
+): { allowed: boolean; userLevel: CommandPermissionLevel } {
+  const userLevel = resolveUserPermissionLevel(interaction, botOwnerId);
+
+  // If user is MODERATOR or above
+  if (userLevel >= CommandPermissionLevel.MODERATOR) {
+    return { allowed: true, userLevel };
+  }
+
+  // Check for dedicated 'Recording Operator' role
+  if (interaction.member && 'roles' in interaction.member) {
+    const member = interaction.member as GuildMember;
+    const hasRecordingRole = member.roles.cache.some(
+      (role) =>
+        role.name.toLowerCase() === 'recording operator' ||
+        role.name.toLowerCase() === 'recording' ||
+        role.name.toLowerCase() === 'recorder'
+    );
+    if (hasRecordingRole) {
+      return { allowed: true, userLevel };
+    }
+  }
+
+  return { allowed: false, userLevel };
+}
+

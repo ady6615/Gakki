@@ -9,6 +9,7 @@ import type {
   AiRecommendationManager,
   LyricsManager,
   FavoritesManager,
+  RecordingManager,
 } from '@gakki/core';
 import { createLogger } from '@gakki/core';
 import {
@@ -16,6 +17,7 @@ import {
   handleChatInputCommand,
   handleAutocomplete,
 } from './commands';
+import type { VoiceReceiverManager } from '../voice';
 
 const logger = createLogger('discord');
 
@@ -49,6 +51,8 @@ export async function createDiscordBot(
   recManager?: AiRecommendationManager,
   lyricsManager?: LyricsManager,
   favoritesManager?: FavoritesManager,
+  recordingManager?: RecordingManager,
+  voiceReceiver?: VoiceReceiverManager,
 ): Promise<Client> {
   client = new Client({
     intents: [
@@ -113,6 +117,8 @@ export async function createDiscordBot(
           recManager,
           lyricsManager,
           favoritesManager,
+          recordingManager,
+          voiceReceiver,
         );
       }
     } catch (err) {

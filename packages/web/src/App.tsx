@@ -11,6 +11,7 @@ import { PlaybackStatus } from './components/PlaybackStatus';
 import { StemMixingSection } from './components/StemMixingSection';
 import { DJTransitionSection } from './components/DJTransitionSection';
 import { SmartDJSection } from './components/SmartDJSection';
+import { RecordingsSection } from './components/RecordingsSection';
 import type {
   PlaybackStatePayload,
   QueueStatePayload,
@@ -43,7 +44,7 @@ const DEFAULT_SETTINGS: SettingsStatePayload = {
 };
 
 function App() {
-  const [activeMainTab, setActiveMainTab] = useState<'player' | 'library' | 'analytics' | 'engine'>('player');
+  const [activeMainTab, setActiveMainTab] = useState<'player' | 'library' | 'recordings' | 'analytics' | 'engine'>('player');
   const [playback, setPlayback] = useState<PlaybackStatePayload>(DEFAULT_PLAYBACK);
   const [queueState, setQueueState] = useState<QueueStatePayload>(DEFAULT_QUEUE);
   const [settings, setSettings] = useState<SettingsStatePayload>(DEFAULT_SETTINGS);
@@ -199,6 +200,14 @@ function App() {
             📚 Library & Playlists
           </button>
           <button
+            className={`nav-tab-btn ${activeMainTab === 'recordings' ? 'active' : ''}`}
+            onClick={() => setActiveMainTab('recordings')}
+            role="tab"
+            aria-selected={activeMainTab === 'recordings'}
+          >
+            🎙️ Recordings
+          </button>
+          <button
             className={`nav-tab-btn ${activeMainTab === 'analytics' ? 'active' : ''}`}
             onClick={() => setActiveMainTab('analytics')}
             role="tab"
@@ -279,7 +288,14 @@ function App() {
           </div>
         )}
 
-        {/* 3. Statistics Tab */}
+        {/* 3. Voice Recordings & Transcripts Tab */}
+        {activeMainTab === 'recordings' && (
+          <div className="recordings-tab-layout">
+            <RecordingsSection guildId={guildId} />
+          </div>
+        )}
+
+        {/* 4. Statistics Tab */}
         {activeMainTab === 'analytics' && (
           <div className="analytics-tab-layout">
             <AnalyticsDashboard guildId={guildId} />

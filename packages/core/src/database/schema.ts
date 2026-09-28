@@ -243,4 +243,88 @@ export const trackVocalFeatures = pgTable('track_vocal_features', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
+/** Recording Sessions (Phase 11) — persistent voice channel recording sessions */
+export const recordingSessions = pgTable('recording_sessions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  guildId: varchar('guild_id', { length: 100 }).notNull(),
+  voiceChannelId: varchar('voice_channel_id', { length: 100 }).notNull(),
+  startedBy: varchar('started_by', { length: 100 }).notNull(),
+  startedAt: timestamp('started_at', { withTimezone: true }).defaultNow().notNull(),
+  endedAt: timestamp('ended_at', { withTimezone: true }),
+  duration: integer('duration').notNull().default(0),
+  status: varchar('status', { length: 50 }).notNull().default('PENDING'),
+  storageKey: text('storage_key'),
+  format: varchar('format', { length: 20 }).notNull().default('wav'),
+  fileSizeBytes: integer('file_size_bytes').default(0),
+  transcriptionStatus: varchar('transcription_status', { length: 50 }).notNull().default('NONE'),
+  visibility: varchar('visibility', { length: 50 }).notNull().default('GUILD'),
+  title: varchar('title', { length: 255 }),
+  metadataStorageKey: text('metadata_storage_key'),
+  errorMessage: text('error_message'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+/** Recording Participants (Phase 11) — per-user attendance & audio tracking */
+export const recordingParticipants = pgTable('recording_participants', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  recordingId: uuid('recording_id')
+    .notNull()
+    .references(() => recordingSessions.id, { onDelete: 'cascade' }),
+  userId: varchar('user_id', { length: 100 }).notNull(),
+  displayName: varchar('display_name', { length: 255 }).notNull(),
+  joinedAt: timestamp('joined_at', { withTimezone: true }).defaultNow().notNull(),
+  leftAt: timestamp('left_at', { withTimezone: true }),
+  firstAudioTimestamp: integer('first_audio_timestamp').default(0),
+  lastAudioTimestamp: integer('last_audio_timestamp').default(0),
+  audioStorageKey: text('audio_storage_key'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+/** Transcripts (Phase 11) — full-text and model metadata */
+export const transcripts = pgTable('transcripts', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  recordingId: uuid('recording_id')
+    .notNull()
+    .references(() => recordingSessions.id, { onDelete: 'cascade' }),
+  provider: varchar('provider', { length: 100 }).notNull(),
+  model: varchar('model', { length: 100 }).notNull(),
+  language: varchar('language', { length: 50 }).default('en'),
+  text: text('text').notNull(),
+  status: varchar('status', { length: 50 }).notNull().default('COMPLETED'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+/** Transcript Segments (Phase 11) — timestamped lines with speaker attribution */
+export const transcriptSegments = pgTable('transcript_segments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  transcriptId: uuid('transcript_id')
+    .notNull()
+    .references(() => transcripts.id, { onDelete: 'cascade' }),
+  recordingId: uuid('recording_id')
+    .notNull()
+    .references(() => recordingSessions.id, { onDelete: 'cascade' }),
+  speakerId: varchar('speaker_id', { length: 100 }),
+  speakerName: varchar('speaker_name', { length: 255 }).notNull(),
+  startMs: integer('start_ms').notNull(),
+  endMs: integer('end_ms').notNull(),
+  text: text('text').notNull(),
+  confidence: real('confidence').notNull().default(1.0),
+  position: integer('position').notNull(),
+});
+
+/** Recording Audit Events (Phase 11) — administrative audit logging */
+export const recordingAuditEvents = pgTable('recording_audit_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  recordingId: uuid('recording_id')
+    .notNull()
+    .references(() => recordingSessions.id, { onDelete: 'cascade' }),
+  actorUserId: varchar('actor_user_id', { length: 100 }).notNull(),
+  action: varchar('action', { length: 100 }).notNull(),
+  timestamp: timestamp('timestamp', { withTimezone: true }).defaultNow().notNull(),
+  details: text('details'),
+});
+
+
 

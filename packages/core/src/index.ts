@@ -57,5 +57,7 @@ export { MockLyricsProvider } from './services/lyrics/mock.provider';
 export { LyricsProviderRegistry } from './services/lyrics/lyrics-provider.registry';
 export { parseLrcLyrics, findActiveLyricLineIndex } from './utils/lrc-parser';
 export { computeLyricsMatchConfidence, normalizeSongString, stringSimilarity } from './utils/lyrics-matcher';
+export * from './transcription';
+
 
 

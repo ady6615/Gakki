@@ -3,3 +3,6 @@ export * from './local-audio.source';
 export * from './http-audio.source';
 export * from './errors';
 export * from './transition-audio.source';
+export * from './wav-utils';
+export * from './recording-mixer';
+

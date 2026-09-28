@@ -95,6 +95,8 @@ export function broadcastSettingsUpdated(event: PlaybackSettingsUpdatedEvent | a
   }
 }
 
+export type WsBroadcastFunction = (event: { type: string; [key: string]: any }) => void;
+
 /**
  * Broadcast arbitrary domain event to all connected WebSocket clients.
  */
