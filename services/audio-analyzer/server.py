@@ -8,7 +8,7 @@ import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from flask import Flask, request, jsonify
-from analyzer import analyze_audio_file, FEATURE_VERSION, EMBEDDING_VERSION
+from analyzer import analyze_audio_file, FEATURE_VERSION, EMBEDDING_VERSION, TRANSITION_FEATURE_VERSION
 
 app = Flask(__name__)
 
@@ -29,6 +29,7 @@ def health():
         'version': '1.0.0',
         'featureVersion': FEATURE_VERSION,
         'embeddingVersion': EMBEDDING_VERSION,
+        'transitionFeatureVersion': TRANSITION_FEATURE_VERSION,
         'maxConcurrency': MAX_CONCURRENT_JOBS,
         'timeoutSeconds': JOB_TIMEOUT_SECONDS,
     })

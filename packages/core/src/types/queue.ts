@@ -115,6 +115,12 @@ export interface GuildPlaybackState {
   voiceIdleTimerActive: boolean;
   voiceIdleReason?: 'empty_channel' | 'queue_empty' | null;
   timeoutSeconds?: number;
+  transitionEnabled?: boolean;
+  transitionDuration?: number;
+  transitionProfile?: 'SMOOTH' | 'BALANCED' | 'ENERGETIC';
+  harmonicMixing?: boolean;
+  autoTempo?: boolean;
+  loudnessNormalize?: boolean;
 }
 
 export interface GuildSettings {
@@ -124,6 +130,12 @@ export interface GuildSettings {
   loopMode: LoopMode;
   stayInChannel: boolean;
   voiceIdleTimeout: number;
+  transitionEnabled?: boolean;
+  transitionDuration?: number;
+  transitionProfile?: 'SMOOTH' | 'BALANCED' | 'ENERGETIC';
+  harmonicMixing?: boolean;
+  autoTempo?: boolean;
+  loudnessNormalize?: boolean;
 }
 
 /**

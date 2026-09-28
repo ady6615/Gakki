@@ -498,7 +498,7 @@ async function runPhase7Tests(): Promise<void> {
     });
 
     mockAdapter.simulateTrackFinish(autoGuild);
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, 600));
     assert(mockAdapter.playCount === 2, 'Dynamic DJ automatically advances and plays next track when queue ends');
   }
 

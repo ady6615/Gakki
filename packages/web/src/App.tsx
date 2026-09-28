@@ -2,6 +2,7 @@ import { HealthCheck } from './components/HealthCheck';
 import { PlaybackStatus } from './components/PlaybackStatus';
 import { PlaylistSection } from './components/PlaylistSection';
 import { SmartDJSection } from './components/SmartDJSection';
+import { DJTransitionSection } from './components/DJTransitionSection';
 
 function App() {
   return (
@@ -16,13 +17,14 @@ function App() {
 
       <main className="app-main">
         <PlaybackStatus />
+        <DJTransitionSection />
         <SmartDJSection />
         <PlaylistSection />
         <HealthCheck />
       </main>
 
       <footer className="app-footer">
-        <p>Gakki v0.7.0 — Phase 7 Audio Analysis, Smart Recommendations & Dynamic DJ</p>
+        <p>Gakki v0.8.0 — Phase 8 Seamless Audio Mixing, Crossfading & Advanced DJ Transitions</p>
       </footer>
     </div>
   );

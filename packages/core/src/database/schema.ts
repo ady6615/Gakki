@@ -47,6 +47,12 @@ export const guildSettings = pgTable('guild_settings', {
   loopMode: varchar('loop_mode', { length: 20 }).notNull().default('off'),
   stayInChannel: boolean('stay_in_channel').notNull().default(false),
   voiceIdleTimeout: integer('voice_idle_timeout').notNull().default(300),
+  transitionEnabled: boolean('transition_enabled').notNull().default(true),
+  transitionDuration: integer('transition_duration').notNull().default(6),
+  transitionProfile: varchar('transition_profile', { length: 32 }).notNull().default('BALANCED'),
+  harmonicMixing: boolean('harmonic_mixing').notNull().default(true),
+  autoTempo: boolean('auto_tempo').notNull().default(true),
+  loudnessNormalize: boolean('loudness_normalize').notNull().default(true),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
@@ -124,3 +130,35 @@ export const trackFeatures = pgTable('track_features', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
+
+/** Track transition features for Phase 8 DJ mixing & crossfading */
+export const trackTransitionFeatures = pgTable('track_transition_features', {
+  trackId: uuid('track_id')
+    .primaryKey()
+    .references(() => tracks.id, { onDelete: 'cascade' }),
+  featureVersion: integer('feature_version').notNull().default(1),
+  integratedLoudnessLufs: real('integrated_loudness_lufs'),
+  loudnessRangeLu: real('loudness_range_lu'),
+  truePeakDbtp: real('true_peak_dbtp'),
+  trackGainDb: real('track_gain_db'),
+  beatGrid: text('beat_grid'), // JSON array of beat timestamps (seconds)
+  beatConfidence: real('beat_confidence'),
+  phraseBoundaries: text('phrase_boundaries'), // JSON object of phrase arrays
+  introStart: real('intro_start'),
+  introEnd: real('intro_end'),
+  introEnergy: real('intro_energy'),
+  outroStart: real('outro_start'),
+  outroEnd: real('outro_end'),
+  outroEnergy: real('outro_energy'),
+  dropCandidates: text('drop_candidates'), // JSON array of candidate timestamps
+  key: varchar('key', { length: 20 }),
+  keyConfidence: real('key_confidence'),
+  camelotCode: varchar('camelot_code', { length: 10 }),
+  structureConfidence: real('structure_confidence'),
+  analysisStatus: varchar('analysis_status', { length: 32 }).notNull().default('PENDING'),
+  analyzedAt: timestamp('analyzed_at', { withTimezone: true }),
+  errorMessage: text('error_message'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});
+

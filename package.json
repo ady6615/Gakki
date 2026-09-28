@@ -15,7 +15,9 @@
     "typecheck": "tsc --noEmit -p packages/core/tsconfig.json && tsc --noEmit -p packages/server/tsconfig.json",
     "evaluate:recommendations": "tsx packages/server/src/scripts/evaluate-recommendations.ts",
     "test:phase6": "tsx packages/server/src/__tests__/phase6.test.ts",
-    "test:phase7": "tsx packages/server/src/__tests__/phase7.test.ts"
+    "test:phase7": "tsx packages/server/src/__tests__/phase7.test.ts",
+    "test:phase8": "tsx packages/server/src/__tests__/phase8.test.ts",
+    "test:transitions": "tsx packages/server/src/scripts/test-transitions.ts"
   },
   "engines": {
     "node": ">=20.0.0"

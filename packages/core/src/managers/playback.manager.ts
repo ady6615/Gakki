@@ -20,11 +20,26 @@ import type {
   GuildSettingsUpdatedEvent,
   VoiceLifecycleUpdatedEvent,
 } from '../types/queue';
+import type { Readable } from 'node:stream';
 import { QueueManager } from './queue.manager';
 import { VoiceLifecycleManager } from './voice-lifecycle.manager';
 import type { GuildSettingsManager } from './guild-settings.manager';
 import type { AnalyticsManager } from './analytics.manager';
 import type { TrackManager } from './track.manager';
+import { TransitionEngine } from '../services/transition-engine';
+import type { TransitionFeatureManager } from './transition-feature.manager';
+import type { GuildTransitionSettings, TransitionPlan, FallbackLevel } from '../types/transition';
+import { TransitionAudioSource } from '../audio/transition-audio.source';
+
+export interface TransitionAudioRenderer {
+  renderTransitionStream(options: {
+    fromSource: string;
+    toSource: string;
+    plan: TransitionPlan;
+    seekFromSeconds?: number;
+    seekToSeconds?: number;
+  }): Promise<{ stream: Readable; process?: any; effectiveFallback: FallbackLevel }>;
+}
 
 type StateChangeListener = (state: VoicePlatformState) => void;
 type QueueUpdateListener = (event: QueueUpdatedEvent) => void;
@@ -73,6 +88,14 @@ export class PlaybackManager {
   private readonly sessions = new Map<string, GuildPlaybackSession>();
 
   public readonly voiceLifecycleManager: VoiceLifecycleManager;
+  public readonly transitionEngine: TransitionEngine = new TransitionEngine();
+  public readonly transitionFeatureManager?: TransitionFeatureManager;
+  private transitionRenderer: TransitionAudioRenderer | null = null;
+  private readonly guildTransitions = new Map<string, GuildTransitionSettings>();
+  private readonly preparedTransitions = new Map<string, { plan: TransitionPlan; nextTrack: QueueTrack; source: AudioSource }>();
+  private readonly isPreparingTransition = new Map<string, boolean>();
+  private lookaheadInterval: NodeJS.Timeout | null = null;
+  private readonly transitionEventListeners = new Set<(event: any) => void>();
 
   private readonly stateListeners = new Set<StateChangeListener>();
   private readonly queueListeners = new Set<QueueUpdateListener>();
@@ -88,8 +111,10 @@ export class PlaybackManager {
     public readonly guildSettingsManager?: GuildSettingsManager,
     public readonly analyticsManager?: AnalyticsManager,
     public readonly trackManager?: TrackManager,
+    transitionFeatureManager?: TransitionFeatureManager,
   ) {
     this.logger.debug('PlaybackManager initialized');
+    this.transitionFeatureManager = transitionFeatureManager;
 
     this.voiceLifecycleManager = new VoiceLifecycleManager(
       this.logger,
@@ -117,6 +142,14 @@ export class PlaybackManager {
       this.emitQueueUpdate(guildId);
     });
 
+    // Start background lookahead transition monitor
+    this.lookaheadInterval = setInterval(() => {
+      this.checkLookaheadTransitions().catch((err) => {
+        this.logger.debug({ err }, 'Error in lookahead transition monitor');
+      });
+    }, 1000);
+    this.lookaheadInterval.unref();
+
     // If persistent settings manager is provided, preload settings
     if (this.guildSettingsManager) {
       this.guildSettingsManager.loadAllSettings().then((allSettings) => {
@@ -126,6 +159,15 @@ export class PlaybackManager {
           this.guildLoopModes.set(guildId, s.loopMode);
           this.voiceLifecycleManager.setStayInChannel(guildId, s.stayInChannel);
           this.voiceLifecycleManager.setTimeoutSeconds(guildId, s.voiceIdleTimeout);
+          this.guildTransitions.set(guildId, {
+            guildId,
+            transitionEnabled: s.transitionEnabled ?? true,
+            transitionDuration: s.transitionDuration ?? 6,
+            transitionProfile: s.transitionProfile ?? 'BALANCED',
+            harmonicMixing: s.harmonicMixing ?? true,
+            autoTempo: s.autoTempo ?? true,
+            loudnessNormalize: s.loudnessNormalize ?? true,
+          });
         }
       }).catch((err) => {
         this.logger.error({ err }, 'Failed to pre-load guild settings in PlaybackManager');
@@ -153,6 +195,7 @@ export class PlaybackManager {
    */
   private saveGuildSettings(guildId: string): void {
     if (!this.guildSettingsManager) return;
+    const t = this.getTransitionSettings(guildId);
     const settings: GuildSettings = {
       guildId,
       volume: this.getVolume(guildId),
@@ -160,6 +203,12 @@ export class PlaybackManager {
       loopMode: this.getLoopMode(guildId),
       stayInChannel: this.isStayInChannel(guildId),
       voiceIdleTimeout: this.voiceLifecycleManager.getTimeoutSeconds(guildId),
+      transitionEnabled: t.transitionEnabled,
+      transitionDuration: t.transitionDuration,
+      transitionProfile: t.transitionProfile,
+      harmonicMixing: t.harmonicMixing,
+      autoTempo: t.autoTempo,
+      loudnessNormalize: t.loudnessNormalize,
     };
     this.guildSettingsManager.saveSettings(settings).catch((err) => {
       this.logger.error({ err, guildId }, 'Failed to persist guild settings asynchronously');
@@ -177,6 +226,15 @@ export class PlaybackManager {
     this.guildLoopModes.set(guildId, settings.loopMode);
     this.voiceLifecycleManager.setStayInChannel(guildId, settings.stayInChannel);
     this.voiceLifecycleManager.setTimeoutSeconds(guildId, settings.voiceIdleTimeout);
+    this.guildTransitions.set(guildId, {
+      guildId,
+      transitionEnabled: settings.transitionEnabled ?? true,
+      transitionDuration: settings.transitionDuration ?? 6,
+      transitionProfile: settings.transitionProfile ?? 'BALANCED',
+      harmonicMixing: settings.harmonicMixing ?? true,
+      autoTempo: settings.autoTempo ?? true,
+      loudnessNormalize: settings.loudnessNormalize ?? true,
+    });
     return settings;
   }
 
@@ -278,6 +336,8 @@ export class PlaybackManager {
     this.voiceLifecycleManager.setBotConnected(guildId, false);
     this.voiceLifecycleManager.cleanup(guildId);
     this.currentTracks.delete(guildId);
+    this.preparedTransitions.delete(guildId);
+    this.isPreparingTransition.delete(guildId);
     this.queueManager.clearQueue(guildId);
     this.emitQueueUpdate(guildId);
   }
@@ -488,6 +548,8 @@ export class PlaybackManager {
 
     // Stop current track cleanly with 'stopped' reason so its Idle event won't trigger duplicate advance
     this.endReasons.set(guildId, 'stopped');
+    this.preparedTransitions.delete(guildId);
+    this.isPreparingTransition.delete(guildId);
     await this.finalizePlaybackEvent(guildId, 'skipped');
     adapter.stop(guildId);
 
@@ -1111,9 +1173,291 @@ export class PlaybackManager {
    */
   async shutdown(): Promise<void> {
     this.logger.info('[PLAYBACK] Shutting down PlaybackManager, finalizing active events');
+    if (this.lookaheadInterval) {
+      clearInterval(this.lookaheadInterval);
+      this.lookaheadInterval = null;
+    }
     for (const [guildId, session] of this.sessions) {
       if (session.currentEventId) {
         await this.finalizePlaybackEvent(guildId, 'stopped');
+      }
+    }
+  }
+
+  // ── Phase 8: DJ Transitions & Lookahead Engine ────────────────────
+
+  setTransitionRenderer(renderer: TransitionAudioRenderer): void {
+    this.transitionRenderer = renderer;
+    this.logger.info('TransitionAudioRenderer registered in PlaybackManager');
+  }
+
+  getTransitionSettings(guildId: string): GuildTransitionSettings {
+    const existing = this.guildTransitions.get(guildId);
+    if (existing) return existing;
+    const defaults: GuildTransitionSettings = {
+      guildId,
+      transitionEnabled: true,
+      transitionDuration: 6,
+      transitionProfile: 'BALANCED',
+      harmonicMixing: true,
+      autoTempo: true,
+      loudnessNormalize: true,
+    };
+    this.guildTransitions.set(guildId, defaults);
+    return defaults;
+  }
+
+  setTransitionSettings(
+    guildId: string,
+    settings: Partial<GuildTransitionSettings>,
+  ): GuildTransitionSettings {
+    const current = this.getTransitionSettings(guildId);
+    const updated: GuildTransitionSettings = {
+      ...current,
+      ...settings,
+      transitionDuration:
+        settings.transitionDuration !== undefined
+          ? Math.max(1, Math.min(8, Math.round(settings.transitionDuration)))
+          : current.transitionDuration,
+    };
+    this.guildTransitions.set(guildId, updated);
+    this.saveGuildSettings(guildId);
+    this.emitSettingsUpdate(guildId);
+    return updated;
+  }
+
+  onTransitionEvent(listener: (event: any) => void): () => void {
+    this.transitionEventListeners.add(listener);
+    return () => {
+      this.transitionEventListeners.delete(listener);
+    };
+  }
+
+  private emitTransitionEvent(event: any): void {
+    for (const listener of this.transitionEventListeners) {
+      try {
+        listener(event);
+      } catch (err) {
+        this.logger.error({ err }, 'Error in transition event listener');
+      }
+    }
+  }
+
+  getPreparedTransition(
+    guildId: string,
+  ): { plan: TransitionPlan; nextTrack: QueueTrack } | null {
+    const p = this.preparedTransitions.get(guildId);
+    return p ? { plan: p.plan, nextTrack: p.nextTrack } : null;
+  }
+
+  /**
+   * Lookahead preparation: Begin preparing the next track transition
+   * 20-30 seconds before the current track reaches completion.
+   */
+  async prepareNextTrackTransition(
+    guildId: string,
+    force = false,
+  ): Promise<TransitionPlan | null> {
+    if (this.isPreparingTransition.get(guildId)) return null;
+    if (this.preparedTransitions.has(guildId) && !force) {
+      return this.preparedTransitions.get(guildId)!.plan;
+    }
+
+    const currentTrack = this.currentTracks.get(guildId);
+    if (!currentTrack) return null;
+
+    const tracksInQueue = this.queueManager.getOrCreateQueue(guildId).tracks;
+    let nextTrack: QueueTrack | undefined = tracksInQueue[0];
+
+    // Respect loop modes
+    const loopMode = this.getLoopMode(guildId);
+    if (loopMode === 'track') {
+      // Loop track does not crossfade into itself
+      return null;
+    }
+    if (!nextTrack && loopMode === 'queue') {
+      nextTrack = currentTrack;
+    }
+
+    if (!nextTrack) return null;
+
+    const settings = this.getTransitionSettings(guildId);
+    if (!settings.transitionEnabled) return null;
+
+    this.isPreparingTransition.set(guildId, true);
+
+    const startTime = Date.now();
+    this.emitTransitionEvent({
+      type: 'transition.preparing',
+      guildId,
+      fromTrackId: currentTrack.trackId || currentTrack.id,
+      toTrackId: nextTrack.trackId || nextTrack.id,
+    });
+
+    try {
+      // Fetch transition features if available
+      const fromFeatures = currentTrack.trackId && this.transitionFeatureManager
+        ? await this.transitionFeatureManager.getFeatures(currentTrack.trackId)
+        : null;
+      const toFeatures = nextTrack.trackId && this.transitionFeatureManager
+        ? await this.transitionFeatureManager.getFeatures(nextTrack.trackId)
+        : null;
+
+      const plan = this.transitionEngine.planTransition({
+        guildId,
+        fromTrackId: currentTrack.trackId || currentTrack.id,
+        toTrackId: nextTrack.trackId || nextTrack.id,
+        fromTrackDuration: currentTrack.duration || 180,
+        toTrackDuration: nextTrack.duration || 180,
+        fromFeatures,
+        toFeatures,
+        settings,
+        rubberBandAvailable: true,
+      });
+
+      if (plan.fallbackLevel === 'HARD_CUT') {
+        this.emitTransitionEvent({
+          type: 'transition.fallback',
+          guildId,
+          plan,
+          reason: plan.explanation,
+        });
+        return plan;
+      }
+
+      if (this.transitionRenderer) {
+        const source = new TransitionAudioSource(
+          `transition:${currentTrack.id}:${nextTrack.id}`,
+          {
+            title: `${currentTrack.name} → ${nextTrack.name}`,
+            artist: nextTrack.artist ?? null,
+            album: nextTrack.album ?? null,
+            duration: Math.round(nextTrack.duration ?? 0),
+          },
+          async () => {
+            const res = await this.transitionRenderer!.renderTransitionStream({
+              fromSource: currentTrack.path,
+              toSource: nextTrack.path,
+              plan,
+              seekFromSeconds: plan.outgoingCueSeconds,
+              seekToSeconds: plan.incomingCueSeconds,
+            });
+            return res.stream;
+          },
+        );
+
+        this.preparedTransitions.set(guildId, {
+          plan,
+          nextTrack,
+          source,
+        });
+
+        const prepDurationMs = Date.now() - startTime;
+        this.logger.info(
+          { guildId, planId: plan.id, prepDurationMs, score: plan.score },
+          '[DJ] Transition prepared successfully',
+        );
+
+        this.emitTransitionEvent({
+          type: 'transition.ready',
+          guildId,
+          fromTrackId: plan.fromTrackId,
+          toTrackId: plan.toTrackId,
+          durationMs: plan.durationSeconds * 1000,
+          profile: plan.profile,
+          score: plan.score,
+          cueSeconds: plan.outgoingCueSeconds,
+        });
+      }
+
+      return plan;
+    } catch (err: any) {
+      this.logger.error({ err, guildId }, '[DJ] Transition preparation failed');
+      this.emitTransitionEvent({
+        type: 'transition.failed',
+        guildId,
+        error: err.message,
+      });
+      return null;
+    } finally {
+      this.isPreparingTransition.delete(guildId);
+    }
+  }
+
+  /**
+   * Monitor active playback sessions to initiate transition preparation
+   * and execute seamless handoff at the outgoing cue point.
+   */
+  private async checkLookaheadTransitions(): Promise<void> {
+    if (!this.adapter) return;
+
+    for (const [guildId, currentTrack] of this.currentTracks) {
+      if (!currentTrack || !currentTrack.duration || currentTrack.duration < 10) {
+        continue;
+      }
+
+      const status = this.adapter.getPlaybackStatus(guildId);
+      if (status !== 'PLAYING') continue;
+
+      const elapsedMs = this.adapter.getPlaybackDuration ? this.adapter.getPlaybackDuration(guildId) : 0;
+      const elapsedSec = elapsedMs / 1000;
+      const remainingSec = currentTrack.duration - elapsedSec;
+
+      // 1. Lookahead Threshold (25s remaining): Trigger preparation if not already prepared
+      const prepThresholdSec = 25;
+      if (remainingSec <= prepThresholdSec && !this.preparedTransitions.has(guildId) && !this.isPreparingTransition.get(guildId)) {
+        await this.prepareNextTrackTransition(guildId);
+      }
+
+      // 2. Outgoing Cue Point: Execute transition handoff
+      const prepared = this.preparedTransitions.get(guildId);
+      if (prepared && elapsedSec >= prepared.plan.outgoingCueSeconds) {
+        this.logger.info(
+          { guildId, elapsedSec, cue: prepared.plan.outgoingCueSeconds, nextTrack: prepared.nextTrack.name },
+          '[DJ] Outgoing cue point reached — executing seamless transition handoff',
+        );
+
+        this.emitTransitionEvent({
+          type: 'transition.started',
+          guildId,
+          fromTrackId: prepared.plan.fromTrackId,
+          toTrackId: prepared.plan.toTrackId,
+          durationMs: prepared.plan.durationSeconds * 1000,
+          profile: prepared.plan.profile,
+        });
+
+        // Dequeue next track from queue
+        const loopMode = this.getLoopMode(guildId);
+        if (loopMode === 'queue') {
+          this.queueManager.addTrack(guildId, currentTrack);
+        }
+        this.queueManager.getNext(guildId);
+
+        // Handoff to transition stream
+        this.currentTracks.set(guildId, prepared.nextTrack);
+        this.preparedTransitions.delete(guildId);
+
+        try {
+          await this.adapter.play(guildId, prepared.source, {
+            volume: this.getVolume(guildId),
+          });
+
+          this.emitTransitionEvent({
+            type: 'transition.completed',
+            guildId,
+            toTrackId: prepared.plan.toTrackId,
+          });
+
+          this.emitQueueUpdate(guildId);
+        } catch (err: any) {
+          this.logger.error({ err, guildId }, '[DJ] Transition handoff failed, falling back to standard track playback');
+          this.emitTransitionEvent({
+            type: 'transition.failed',
+            guildId,
+            error: err.message,
+          });
+          await this.advanceQueue(guildId);
+        }
       }
     }
   }

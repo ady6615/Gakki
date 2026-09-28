@@ -11,6 +11,7 @@ import {
   AnalyticsManager,
   PlaylistManager,
   AiRecommendationManager,
+  TransitionFeatureManager,
 } from '@gakki/core';
 import { createApiServer } from './api/server';
 import { createDiscordBot, DiscordVoiceAdapter } from './discord';
@@ -18,11 +19,25 @@ import { createWebSocketServer, broadcastEvent } from './websocket';
 import { ArtworkService } from './services/artwork.service';
 import { createConfiguredAudioSourceManager } from './sources';
 import { AudioAnalysisClient } from './services/audio-analysis.client';
+import { detectFFmpegCapabilities } from './audio/ffmpeg-capabilities';
+import { TransitionProcessor } from './audio/transition-processor';
 
 const logger = createLogger('main');
 
 async function main(): Promise<void> {
-  logger.info('Starting Gakki Music Platform — Phase 7 (Audio Analysis, Smart Recommendations & Dynamic DJ)...');
+  logger.info('Starting Gakki Music Platform — Phase 8 (Seamless Audio Mixing, Crossfading & Advanced DJ Transitions)...');
+
+  // ── FFmpeg Capability Detection ─────────────────────────────────
+  const ffmpegCaps = await detectFFmpegCapabilities();
+  logger.info(
+    {
+      acrossfade: ffmpegCaps.acrossfade,
+      rubberband: ffmpegCaps.rubberband,
+      loudnorm: ffmpegCaps.loudnorm,
+      atempo: ffmpegCaps.atempo,
+    },
+    'FFmpeg capabilities detected at startup',
+  );
 
   // ── Configuration ──────────────────────────────────────────────
   const config = loadConfig();
@@ -59,11 +74,15 @@ async function main(): Promise<void> {
     recLogger,
   );
 
+  // ── Phase 8: Transition Feature Manager ─────────────────────────
+  const transitionFeatureManager = new TransitionFeatureManager(dbClient);
+
   // ── Phase 7: Python Audio Analysis Client ───────────────────────
   const analysisClient = new AudioAnalysisClient(recManager.featureManager, {
     serviceUrl: config.AUDIO_ANALYZER_URL,
     maxConcurrency: 2,
     jobTimeoutMs: 30000,
+    transitionFeatureManager,
   });
 
   // Automatically trigger asynchronous background audio analysis when new tracks enter library
@@ -91,7 +110,17 @@ async function main(): Promise<void> {
     guildSettingsManager,
     analyticsManager,
     trackManager,
+    transitionFeatureManager,
   );
+
+  // ── Phase 8: Transition Processor & Real-Time Pipe ──────────────
+  const transitionProcessor = new TransitionProcessor();
+  playbackManager.setTransitionRenderer(transitionProcessor);
+
+  // Broadcast DJ transition events to WebSocket
+  playbackManager.onTransitionEvent((event) => {
+    broadcastEvent(event);
+  });
 
   // ── Dynamic DJ Auto-Selection on Track End ──────────────────────
   playbackManager.onPlaybackEvent(async (event) => {

@@ -238,44 +238,54 @@ export class DiscordVoiceAdapter implements VoicePlatformAdapter {
       this.guildFilters.set(guildId, options.filters);
     }
 
-    // Determine input path: local file, buffered remote stream, or identifier
-    let audioPath: string;
-    if (source instanceof LocalAudioSource) {
-      audioPath = source.resolvedPath;
-    } else if (source instanceof HttpAudioSource) {
-      const prepared = await this.remoteStreamManager.prepareStream(guildId, source.url, {
-        persistent: false,
+    let resource: AudioResource;
+    let audioPath = source.identifier;
+
+    if ((source as any).isRawPcmStream) {
+      const rawStream = await source.getStream();
+      resource = createAudioResource(rawStream, {
+        inputType: StreamType.Raw,
+        inlineVolume: true,
       });
-      audioPath = prepared.filePathOrUrl;
-      if (prepared.cacheKey) {
-        this.activeCacheKeys.set(guildId, prepared.cacheKey);
-      }
     } else {
-      audioPath = source.identifier;
-    }
-
-    // Create audio resource using FFmpeg filter pipeline (supports local files and buffered streams)
-    const activeFilters = options?.filters ?? this.guildFilters.get(guildId);
-    const proc = createFilteredFfmpegProcess(audioPath, {
-      filters: activeFilters,
-      seekSeconds: options?.seekSeconds,
-    });
-    this.activeProcesses.set(guildId, proc);
-
-    if (!proc.stdout) {
-      throw new Error('FFmpeg stdout stream is unavailable');
-    }
-
-    const resource = createAudioResource(proc.stdout, {
-      inputType: StreamType.Raw,
-      inlineVolume: true,
-    });
-
-    proc.on('exit', () => {
-      if (this.activeProcesses.get(guildId) === proc) {
-        this.activeProcesses.delete(guildId);
+      // Determine input path: local file, buffered remote stream, or identifier
+      if (source instanceof LocalAudioSource) {
+        audioPath = source.resolvedPath;
+      } else if (source instanceof HttpAudioSource) {
+        const prepared = await this.remoteStreamManager.prepareStream(guildId, source.url, {
+          persistent: false,
+        });
+        audioPath = prepared.filePathOrUrl;
+        if (prepared.cacheKey) {
+          this.activeCacheKeys.set(guildId, prepared.cacheKey);
+        }
+      } else {
+        audioPath = source.identifier;
       }
-    });
+
+      // Create audio resource using FFmpeg filter pipeline (supports local files and buffered streams)
+      const activeFilters = options?.filters ?? this.guildFilters.get(guildId);
+      const proc = createFilteredFfmpegProcess(audioPath, {
+        filters: activeFilters,
+        seekSeconds: options?.seekSeconds,
+      });
+      this.activeProcesses.set(guildId, proc);
+
+      if (!proc.stdout) {
+        throw new Error('FFmpeg stdout stream is unavailable');
+      }
+
+      resource = createAudioResource(proc.stdout, {
+        inputType: StreamType.Raw,
+        inlineVolume: true,
+      });
+
+      proc.on('exit', () => {
+        if (this.activeProcesses.get(guildId) === proc) {
+          this.activeProcesses.delete(guildId);
+        }
+      });
+    }
 
     // Apply configured volume (0.0 to 2.0 linear gain)
     const currentVolume = options?.volume ?? this.guildVolumes.get(guildId) ?? 100;

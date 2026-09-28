@@ -4,9 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "start": "node dist/index.js",
     "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:transitions": "tsx src/scripts/test-transitions.ts"
   },
   "dependencies": {
     "@discordjs/voice": "^0.19.2",

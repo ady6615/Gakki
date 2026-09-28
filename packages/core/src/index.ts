@@ -42,5 +42,9 @@ export { LyricsManager } from './managers/lyrics.manager';
 export { RecordingManager } from './managers/recording.manager';
 export { VoiceLifecycleManager } from './managers/voice-lifecycle.manager';
 export { GuildSettingsManager } from './managers/guild-settings.manager';
+export { TransitionFeatureManager } from './managers/transition-feature.manager';
+export { TransitionEngine } from './services/transition-engine';
+export { KeyCompatibilityService } from './services/key-compatibility.service';
+export { CuePointService } from './services/cue-point.service';
 
 

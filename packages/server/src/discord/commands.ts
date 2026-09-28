@@ -30,6 +30,7 @@ import { listLocalAudioFiles, listLocalFolders } from '../audio/local-files';
 import { enqueueFolder, enqueueMultipleFiles } from '../audio/batch-loader';
 import { globalRateLimiter } from '../security/rate-limiter';
 import { createConfiguredAudioSourceManager } from '../sources';
+import { getFFmpegCapabilities } from '../audio/ffmpeg-capabilities';
 
 const logger = createLogger('discord-commands');
 
@@ -415,6 +416,54 @@ export const slashCommandDefinitions = [
               { name: 'Energetic', value: 'ENERGETIC' },
             ),
         ),
+    ),
+
+  new SlashCommandBuilder()
+    .setName('transition')
+    .setDescription('Configure seamless audio mixing, crossfading & DJ transitions')
+    .addSubcommand((sub) =>
+      sub
+        .setName('on')
+        .setDescription('Enable seamless transitions / crossfading'),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('off')
+        .setDescription('Disable seamless transitions (use hard cuts)'),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('duration')
+        .setDescription('Set transition crossfade duration (1-8 seconds)')
+        .addIntegerOption((opt) =>
+          opt
+            .setName('seconds')
+            .setDescription('Duration in seconds (1 to 8)')
+            .setRequired(true)
+            .setMinValue(1)
+            .setMaxValue(8),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('profile')
+        .setDescription('Select transition profile')
+        .addStringOption((opt) =>
+          opt
+            .setName('name')
+            .setDescription('Transition profile')
+            .setRequired(true)
+            .addChoices(
+              { name: 'Smooth (6-8s, equal-power, harmonic matching)', value: 'SMOOTH' },
+              { name: 'Balanced (4-6s, equal-power, dynamic)', value: 'BALANCED' },
+              { name: 'Energetic (1-4s, punchy drop mixing)', value: 'ENERGETIC' },
+            ),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('status')
+        .setDescription('View current transition settings and upcoming transition preview'),
     ),
 ];
 
@@ -1586,6 +1635,65 @@ export async function handleChatInputCommand(
             .map((c, i) => `${i + 1}. **${c.title}** ${c.artist ? `(${c.artist})` : ''} — *${c.reasons[0] || 'Vibe match'}*`)
             .join('\n');
           embed.addFields({ name: 'Lookahead Next Queue', value: queueText });
+        }
+
+        await interaction.reply({ embeds: [embed] });
+      }
+      break;
+    }
+
+    case 'transition': {
+      const sub = interaction.options.getSubcommand();
+      const currentSettings = playbackManager.getTransitionSettings(guildId);
+
+      if (sub === 'on') {
+        playbackManager.setTransitionSettings(guildId, { transitionEnabled: true });
+        await interaction.reply('🎚️ **DJ Transitions are now **ENABLED****\nTracks will seamlessly crossfade with loudness normalization and beat alignment!');
+      } else if (sub === 'off') {
+        playbackManager.setTransitionSettings(guildId, { transitionEnabled: false });
+        await interaction.reply('🎚️ **DJ Transitions are now **DISABLED**** (using hard cuts)');
+      } else if (sub === 'duration') {
+        const seconds = interaction.options.getInteger('seconds') ?? interaction.options.getInteger('duration') ?? 6;
+        if (seconds < 1 || seconds > 8) {
+          await interaction.reply({ content: '⚠️ Duration must be between 1 and 8 seconds.', ephemeral: true });
+          return;
+        }
+        playbackManager.setTransitionSettings(guildId, { transitionDuration: seconds });
+        await interaction.reply(`🎚️ DJ crossfade duration set to **${seconds}s**.`);
+      } else if (sub === 'profile') {
+        const raw = (interaction.options.getString('name') ?? interaction.options.getString('profile') ?? 'BALANCED').toUpperCase();
+        if (!['SMOOTH', 'BALANCED', 'ENERGETIC'].includes(raw)) {
+          await interaction.reply({ content: '⚠️ Profile must be SMOOTH, BALANCED, or ENERGETIC.', ephemeral: true });
+          return;
+        }
+        playbackManager.setTransitionSettings(guildId, { transitionProfile: raw as any });
+        await interaction.reply(`🎚️ DJ transition profile set to **${raw}**.`);
+      } else if (sub === 'status') {
+        const s = playbackManager.getTransitionSettings(guildId);
+        const caps = getFFmpegCapabilities();
+        const prepared = playbackManager.getPreparedTransition(guildId);
+
+        const embed = new EmbedBuilder()
+          .setTitle('🎚️ DJ Transition Settings & Status')
+          .setColor(s.transitionEnabled ? 0x2ecc71 : 0x95a5a6)
+          .addFields(
+            { name: 'Status', value: s.transitionEnabled ? '🟢 Enabled' : '⚪ Disabled', inline: true },
+            { name: 'Duration', value: `${s.transitionDuration}s`, inline: true },
+            { name: 'Profile', value: `\`${s.transitionProfile}\``, inline: true },
+            { name: 'Harmonic Mixing', value: s.harmonicMixing ? '✅ Yes' : '❌ No', inline: true },
+            { name: 'Auto Tempo', value: s.autoTempo ? '✅ Yes' : '❌ No', inline: true },
+            { name: 'Loudness Normalization', value: s.loudnessNormalize ? '✅ Yes' : '❌ No', inline: true },
+            {
+              name: 'FFmpeg Capabilities',
+              value: `RubberBand: ${caps?.rubberband ? '✅' : '❌'} | Acrossfade: ${caps?.acrossfade ? '✅' : '❌'} | Loudnorm: ${caps?.loudnorm ? '✅' : '❌'}`,
+            },
+          );
+
+        if (prepared) {
+          embed.addFields({
+            name: 'Prepared Transition',
+            value: `Next: **${prepared.nextTrack.name}**\nCue: ${prepared.plan.outgoingCueSeconds}s | Score: ${(prepared.plan.score * 100).toFixed(0)}% | Level: \`${prepared.plan.fallbackLevel}\``,
+          });
         }
 
         await interaction.reply({ embeds: [embed] });

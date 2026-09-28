@@ -2,7 +2,12 @@ import { spawn } from 'node:child_process';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as crypto from 'node:crypto';
-import type { AudioFeatureManager, AcousticFeatures, AnalysisStatus } from '@gakki/core';
+import type {
+  AudioFeatureManager,
+  AcousticFeatures,
+  AnalysisStatus,
+  TransitionFeatureManager,
+} from '@gakki/core';
 import { createLogger } from '@gakki/core';
 import { broadcastEvent } from '../websocket';
 
@@ -30,6 +35,7 @@ export class AudioAnalysisClient {
   private readonly serviceUrl: string;
   private readonly maxConcurrency: number;
   private readonly jobTimeoutMs: number;
+  private readonly transitionFeatureManager?: TransitionFeatureManager;
   private activeJobsCount = 0;
   private readonly jobQueue: AnalysisJob[] = [];
   private readonly processingTrackIds = new Set<string>();
@@ -40,11 +46,13 @@ export class AudioAnalysisClient {
       serviceUrl?: string;
       maxConcurrency?: number;
       jobTimeoutMs?: number;
+      transitionFeatureManager?: TransitionFeatureManager;
     } = {},
   ) {
     this.serviceUrl = options.serviceUrl || process.env.AUDIO_ANALYZER_URL || 'http://127.0.0.1:5050';
     this.maxConcurrency = options.maxConcurrency || 2;
     this.jobTimeoutMs = options.jobTimeoutMs || 30000;
+    this.transitionFeatureManager = options.transitionFeatureManager;
 
     logger.info(
       { serviceUrl: this.serviceUrl, maxConcurrency: this.maxConcurrency },
@@ -176,6 +184,21 @@ export class AudioAnalysisClient {
       contentHash: contentHash || result.contentHash,
     });
 
+    // 6. Persist Transition Features if available
+    const transitionFeat = (result as any).transitionFeatures;
+    if (this.transitionFeatureManager && transitionFeat) {
+      try {
+        await this.transitionFeatureManager.saveFeatures({
+          ...transitionFeat,
+          trackId,
+          analysisStatus: 'READY',
+        });
+        logger.debug({ trackId }, '[ANALYZER] Saved transition features');
+      } catch (err) {
+        logger.warn({ err, trackId }, 'Failed to persist transition features');
+      }
+    }
+
     logger.info(
       { trackId, bpm: saved.bpm, energy: saved.energy, key: saved.key },
       '[ANALYZER] Audio analysis completed successfully',
@@ -209,6 +232,12 @@ export class AudioAnalysisClient {
 
       if (!response.ok) {
         logger.warn({ status: response.status }, 'HTTP audio analyzer returned non-200 response');
+        try {
+          const errData = (await response.json()) as any;
+          if (errData && errData.analysisStatus) {
+            return errData as AcousticFeatures;
+          }
+        } catch {}
         return null;
       }
 
@@ -272,7 +301,10 @@ export class AudioAnalysisClient {
             const parsed = JSON.parse(stdout);
             return resolve(parsed);
           } catch {
-            return resolve(null);
+            return resolve({
+              analysisStatus: 'FAILED',
+              errorMessage: stderr ? stderr.split('\n').filter(Boolean).pop() : `Subprocess exited with code ${code}`,
+            } as any);
           }
         }
 

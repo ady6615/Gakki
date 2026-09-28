@@ -6,4 +6,4 @@ export * from './platform';
 export * from './audio';
 export * from './source';
 export * from './recommendation';
-
+export * from './transition';

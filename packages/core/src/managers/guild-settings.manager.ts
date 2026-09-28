@@ -45,6 +45,12 @@ export class GuildSettingsManager {
       loopMode: 'off',
       stayInChannel: false,
       voiceIdleTimeout: this.defaultTimeout,
+      transitionEnabled: true,
+      transitionDuration: 6,
+      transitionProfile: 'BALANCED',
+      harmonicMixing: true,
+      autoTempo: true,
+      loudnessNormalize: true,
     };
   }
 
@@ -80,6 +86,12 @@ export class GuildSettingsManager {
         loopMode: (row.loopMode as LoopMode) || 'off',
         stayInChannel: row.stayInChannel,
         voiceIdleTimeout: row.voiceIdleTimeout,
+        transitionEnabled: row.transitionEnabled ?? true,
+        transitionDuration: row.transitionDuration ?? 6,
+        transitionProfile: (row.transitionProfile as any) || 'BALANCED',
+        harmonicMixing: row.harmonicMixing ?? true,
+        autoTempo: row.autoTempo ?? true,
+        loudnessNormalize: row.loudnessNormalize ?? true,
       };
 
       logger.info({ guildId }, '[DB] Guild settings loaded');
@@ -110,6 +122,12 @@ export class GuildSettingsManager {
           loopMode: settings.loopMode,
           stayInChannel: settings.stayInChannel,
           voiceIdleTimeout: settings.voiceIdleTimeout,
+          transitionEnabled: settings.transitionEnabled ?? true,
+          transitionDuration: settings.transitionDuration ?? 6,
+          transitionProfile: settings.transitionProfile ?? 'BALANCED',
+          harmonicMixing: settings.harmonicMixing ?? true,
+          autoTempo: settings.autoTempo ?? true,
+          loudnessNormalize: settings.loudnessNormalize ?? true,
           updatedAt: new Date(),
         })
         .onConflictDoUpdate({
@@ -122,6 +140,12 @@ export class GuildSettingsManager {
             loopMode: settings.loopMode,
             stayInChannel: settings.stayInChannel,
             voiceIdleTimeout: settings.voiceIdleTimeout,
+            transitionEnabled: settings.transitionEnabled ?? true,
+            transitionDuration: settings.transitionDuration ?? 6,
+            transitionProfile: settings.transitionProfile ?? 'BALANCED',
+            harmonicMixing: settings.harmonicMixing ?? true,
+            autoTempo: settings.autoTempo ?? true,
+            loudnessNormalize: settings.loudnessNormalize ?? true,
             updatedAt: new Date(),
           },
         });
