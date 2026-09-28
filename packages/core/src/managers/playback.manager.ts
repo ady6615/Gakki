@@ -30,6 +30,9 @@ import { TransitionEngine } from '../services/transition-engine';
 import type { TransitionFeatureManager } from './transition-feature.manager';
 import type { GuildTransitionSettings, TransitionPlan, FallbackLevel } from '../types/transition';
 import { TransitionAudioSource } from '../audio/transition-audio.source';
+import { LayeredTransitionEngine } from '../services/layered-transition-engine';
+import type { StemManager } from './stem.manager';
+import type { GuildStemSettings, LayeredTransitionPlan } from '../types/stem';
 
 export interface TransitionAudioRenderer {
   renderTransitionStream(options: {
@@ -90,8 +93,11 @@ export class PlaybackManager {
   public readonly voiceLifecycleManager: VoiceLifecycleManager;
   public readonly transitionEngine: TransitionEngine = new TransitionEngine();
   public readonly transitionFeatureManager?: TransitionFeatureManager;
+  public readonly stemManager?: StemManager;
+  public readonly layeredTransitionEngine: LayeredTransitionEngine = new LayeredTransitionEngine();
   private transitionRenderer: TransitionAudioRenderer | null = null;
   private readonly guildTransitions = new Map<string, GuildTransitionSettings>();
+  private readonly guildStemSettings = new Map<string, GuildStemSettings>();
   private readonly preparedTransitions = new Map<string, { plan: TransitionPlan; nextTrack: QueueTrack; source: AudioSource }>();
   private readonly isPreparingTransition = new Map<string, boolean>();
   private lookaheadInterval: NodeJS.Timeout | null = null;
@@ -112,9 +118,11 @@ export class PlaybackManager {
     public readonly analyticsManager?: AnalyticsManager,
     public readonly trackManager?: TrackManager,
     transitionFeatureManager?: TransitionFeatureManager,
+    stemManager?: StemManager,
   ) {
     this.logger.debug('PlaybackManager initialized');
     this.transitionFeatureManager = transitionFeatureManager;
+    this.stemManager = stemManager;
 
     this.voiceLifecycleManager = new VoiceLifecycleManager(
       this.logger,
@@ -1226,6 +1234,41 @@ export class PlaybackManager {
     return updated;
   }
 
+  getStemSettings(guildId: string): GuildStemSettings {
+    const existing = this.guildStemSettings.get(guildId);
+    if (existing) return existing;
+    const defaults: GuildStemSettings = {
+      guildId,
+      stemSeparationEnabled: true,
+      vocalClashPrevention: true,
+      vocalDucking: true,
+      vocalDuckDb: 6.0,
+      layeredTransitions: true,
+      stemProviderPreference: 'auto',
+    };
+    this.guildStemSettings.set(guildId, defaults);
+    return defaults;
+  }
+
+  setStemSettings(
+    guildId: string,
+    settings: Partial<GuildStemSettings>,
+  ): GuildStemSettings {
+    const current = this.getStemSettings(guildId);
+    const updated: GuildStemSettings = {
+      ...current,
+      ...settings,
+      vocalDuckDb:
+        settings.vocalDuckDb !== undefined
+          ? Math.max(3.0, Math.min(12.0, Math.round(settings.vocalDuckDb * 10) / 10))
+          : current.vocalDuckDb,
+    };
+    this.guildStemSettings.set(guildId, updated);
+    this.saveGuildSettings(guildId);
+    this.emitSettingsUpdate(guildId);
+    return updated;
+  }
+
   onTransitionEvent(listener: (event: any) => void): () => void {
     this.transitionEventListeners.add(listener);
     return () => {
@@ -1325,6 +1368,71 @@ export class PlaybackManager {
         return plan;
       }
 
+      // Phase 9: Stem & Vocal Clash Analysis
+      const stemSettings = this.getStemSettings(guildId);
+      if (this.stemManager && stemSettings.stemSeparationEnabled) {
+        try {
+          const fromStems = currentTrack.trackId ? await this.stemManager.getStems(currentTrack.trackId) : null;
+          const toStems = nextTrack.trackId ? await this.stemManager.getStems(nextTrack.trackId) : null;
+          const fromVocal = currentTrack.trackId ? await this.stemManager.getVocalFeatures(currentTrack.trackId) : null;
+          const toVocal = nextTrack.trackId ? await this.stemManager.getVocalFeatures(nextTrack.trackId) : null;
+
+          const layeredPlan = this.layeredTransitionEngine.planTransition({
+            guildId,
+            fromTrackId: currentTrack.trackId || currentTrack.id,
+            toTrackId: nextTrack.trackId || nextTrack.id,
+            basePlan: plan,
+            outgoingVocalFeatures: fromVocal,
+            incomingVocalFeatures: toVocal,
+            outgoingStems: fromStems?.stems,
+            incomingStems: toStems?.stems,
+            outgoingStemQuality: fromStems?.quality,
+            incomingStemQuality: toStems?.quality,
+            guildSettings: stemSettings,
+          });
+
+          this.emitTransitionEvent({
+            type: 'transition.strategy.selected',
+            guildId,
+            fromTrackId: layeredPlan.fromTrackId,
+            toTrackId: layeredPlan.toTrackId,
+            strategy: layeredPlan.strategy,
+            vocalClashScore: layeredPlan.vocalClashScore,
+          });
+
+          if (layeredPlan.vocalClashScore >= 0.3) {
+            this.emitTransitionEvent({
+              type: 'transition.vocal-clash.detected',
+              guildId,
+              clashScore: layeredPlan.vocalClashScore,
+              strategy: layeredPlan.strategy,
+            });
+          }
+
+          if (layeredPlan.strategy === 'VOCAL_DUCK') {
+            this.emitTransitionEvent({
+              type: 'transition.ducking.started',
+              guildId,
+              duckDb: layeredPlan.vocalDuckDb,
+            });
+          } else if (layeredPlan.strategy === 'INSTRUMENTAL_OUTRO_TO_VOCAL_INTRO') {
+            this.emitTransitionEvent({
+              type: 'transition.layered.started',
+              guildId,
+              strategy: layeredPlan.strategy,
+            });
+          }
+        } catch (stemErr) {
+          this.logger.warn({ err: stemErr, guildId }, '[DJ] Stem analysis skipped, falling back to base transition');
+          this.emitTransitionEvent({
+            type: 'transition.fallback',
+            guildId,
+            plan,
+            reason: 'Stem processing unavailable, using Phase 8 crossfade',
+          });
+        }
+      }
+
       if (this.transitionRenderer) {
         const source = new TransitionAudioSource(
           `transition:${currentTrack.id}:${nextTrack.id}`,
@@ -1402,6 +1510,24 @@ export class PlaybackManager {
       const elapsedMs = this.adapter.getPlaybackDuration ? this.adapter.getPlaybackDuration(guildId) : 0;
       const elapsedSec = elapsedMs / 1000;
       const remainingSec = currentTrack.duration - elapsedSec;
+
+      // 0. Stem Precomputation Lookahead (default 60s remaining): Pre-analyze upcoming track stems if missing
+      const stemPrepThresholdSec = Number(process.env.DJ_STEM_PREPARE_SECONDS || 60);
+      if (remainingSec <= stemPrepThresholdSec && this.stemManager) {
+        const nextTrack = this.queueManager.getOrCreateQueue(guildId).tracks[0];
+        if (nextTrack && (nextTrack.trackId || nextTrack.id)) {
+          const trackId = nextTrack.trackId || nextTrack.id;
+          this.stemManager.getStems(trackId).then((stems) => {
+            if (!stems) {
+              this.emitTransitionEvent({
+                type: 'stem.analysis.started',
+                guildId,
+                trackId,
+              });
+            }
+          }).catch(() => {});
+        }
+      }
 
       // 1. Lookahead Threshold (25s remaining): Trigger preparation if not already prepared
       const prepThresholdSec = 25;

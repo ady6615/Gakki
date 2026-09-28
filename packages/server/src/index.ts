@@ -12,6 +12,7 @@ import {
   PlaylistManager,
   AiRecommendationManager,
   TransitionFeatureManager,
+  StemManager,
 } from '@gakki/core';
 import { createApiServer } from './api/server';
 import { createDiscordBot, DiscordVoiceAdapter } from './discord';
@@ -21,6 +22,8 @@ import { createConfiguredAudioSourceManager } from './sources';
 import { AudioAnalysisClient } from './services/audio-analysis.client';
 import { detectFFmpegCapabilities } from './audio/ffmpeg-capabilities';
 import { TransitionProcessor } from './audio/transition-processor';
+import { StemProviderRegistry } from './audio/stems/stem-provider.registry';
+import { StemWorkerPool } from './audio/stems/stem-worker-pool';
 
 const logger = createLogger('main');
 
@@ -85,13 +88,36 @@ async function main(): Promise<void> {
     transitionFeatureManager,
   });
 
-  // Automatically trigger asynchronous background audio analysis when new tracks enter library
+  // ── Phase 9: Stem Separation & Storage Lifecycle ────────────────
+  const stemManager = new StemManager(dbClient);
+  await stemManager.cleanOrphanedStems();
+
+  const stemRegistry = StemProviderRegistry.getInstance();
+  const stemWorkerPool = StemWorkerPool.getInstance(stemManager);
+  const stemCaps = await stemRegistry.discoverCapabilities();
+  logger.info('Stem Separation Providers:');
+  for (const [name, cap] of Object.entries(stemCaps)) {
+    logger.info(`  ${name}: ${cap.available ? 'available' : 'unavailable'} (${cap.computeBackend})`);
+  }
+
+  // Automatically trigger asynchronous background audio analysis and stem separation when new tracks enter library
   trackManager.onTrackSaved((savedTrack, source) => {
     if (source && source.sourceUrl) {
       analysisClient.queueAnalysis({
         trackId: savedTrack.id,
         filePath: source.sourceUrl,
       });
+
+      stemWorkerPool.enqueue(
+        {
+          trackId: savedTrack.id,
+          filePath: source.sourceUrl,
+          title: savedTrack.title,
+          duration: savedTrack.duration || 180,
+        },
+        { storageMode: 'persistent' },
+        'LOW',
+      );
     }
   });
 
@@ -111,6 +137,7 @@ async function main(): Promise<void> {
     analyticsManager,
     trackManager,
     transitionFeatureManager,
+    stemManager,
   );
 
   // ── Phase 8: Transition Processor & Real-Time Pipe ──────────────

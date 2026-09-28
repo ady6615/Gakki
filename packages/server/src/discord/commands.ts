@@ -31,6 +31,8 @@ import { enqueueFolder, enqueueMultipleFiles } from '../audio/batch-loader';
 import { globalRateLimiter } from '../security/rate-limiter';
 import { createConfiguredAudioSourceManager } from '../sources';
 import { getFFmpegCapabilities } from '../audio/ffmpeg-capabilities';
+import { StemWorkerPool } from '../audio/stems/stem-worker-pool';
+import { StemProviderRegistry } from '../audio/stems/stem-provider.registry';
 
 const logger = createLogger('discord-commands');
 
@@ -415,6 +417,56 @@ export const slashCommandDefinitions = [
               { name: 'Chill', value: 'CHILL' },
               { name: 'Energetic', value: 'ENERGETIC' },
             ),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('stems')
+        .setDescription('Enable or disable stem separation for layered DJ mixing')
+        .addStringOption((opt) =>
+          opt
+            .setName('state')
+            .setDescription('Turn stem separation on or off')
+            .setRequired(true)
+            .addChoices({ name: 'On', value: 'on' }, { name: 'Off', value: 'off' }),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('vocalduck')
+        .setDescription('Enable or disable vocal clash prevention ducking')
+        .addStringOption((opt) =>
+          opt
+            .setName('state')
+            .setDescription('Turn vocal ducking on or off')
+            .setRequired(true)
+            .addChoices({ name: 'On', value: 'on' }, { name: 'Off', value: 'off' }),
+        ),
+    ),
+
+  new SlashCommandBuilder()
+    .setName('stems')
+    .setDescription('Stem separation status and analysis commands')
+    .addSubcommand((sub) =>
+      sub
+        .setName('status')
+        .setDescription('View stem separation status for a track or general capabilities')
+        .addStringOption((opt) =>
+          opt
+            .setName('track')
+            .setDescription('Track title, query, or UUID')
+            .setRequired(false),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('analyze')
+        .setDescription('Enqueue background stem separation for a track')
+        .addStringOption((opt) =>
+          opt
+            .setName('track')
+            .setDescription('Track title, query, or UUID')
+            .setRequired(true),
         ),
     ),
 
@@ -1638,6 +1690,94 @@ export async function handleChatInputCommand(
         }
 
         await interaction.reply({ embeds: [embed] });
+      } else if (sub === 'stems') {
+        const state = interaction.options.getString('state', true) === 'on';
+        playbackManager.setStemSettings(guildId, { stemSeparationEnabled: state });
+        await interaction.reply(`🎛️ **DJ Stem Separation is now ${state ? 'ENABLED' : 'DISABLED'}**`);
+      } else if (sub === 'vocalduck') {
+        const state = interaction.options.getString('state', true) === 'on';
+        playbackManager.setStemSettings(guildId, { vocalDucking: state });
+        await interaction.reply(`🎛️ **DJ Vocal Ducking is now ${state ? 'ENABLED' : 'DISABLED'}**`);
+      }
+      break;
+    }
+
+    case 'stems': {
+      const sub = interaction.options.getSubcommand();
+      const trackQuery = interaction.options.getString('track');
+      let targetTrackId: string | undefined;
+      let targetTitle = 'Current Track';
+
+      if (trackQuery && trackManager) {
+        const found = await trackManager.search(trackQuery, 1);
+        if (found.length > 0) {
+          targetTrackId = found[0].id;
+          targetTitle = found[0].title;
+        }
+      }
+
+      if (!targetTrackId) {
+        const current = playbackManager.getCurrentTrack(guildId);
+        if (current && (current as any).trackId) {
+          targetTrackId = (current as any).trackId;
+          targetTitle = current.name;
+        }
+      }
+
+      if (sub === 'status') {
+        const registry = StemProviderRegistry.getInstance();
+        const caps = await registry.discoverCapabilities();
+        const activeStemSettings = playbackManager.getStemSettings(guildId);
+
+        let stemInfo = 'No track specified or currently playing.';
+        if (targetTrackId && playbackManager.stemManager) {
+          const stems = await playbackManager.stemManager.getStems(targetTrackId);
+          const vocal = await playbackManager.stemManager.getVocalFeatures(targetTrackId);
+          if (stems) {
+            stemInfo = `**Track:** ${targetTitle}\n**Provider:** \`${stems.provider}\` (${stems.modelName} v${stems.modelVersion})\n**Quality Score:** ${(stems.quality.overallQuality * 100).toFixed(0)}%\n**Vocal Activity:** ${((vocal?.meanVocalActivity ?? 0) * 100).toFixed(0)}%\n**Storage Mode:** \`${stems.storageMode}\``;
+          } else {
+            stemInfo = `**Track:** ${targetTitle}\n*Stems not yet extracted. Run \`/stems analyze track:${targetTitle}\` to process.*`;
+          }
+        }
+
+        const embed = new EmbedBuilder()
+          .setTitle('🎛️ Stem Separation Status')
+          .setColor(activeStemSettings.stemSeparationEnabled ? 0x2ecc71 : 0x95a5a6)
+          .addFields(
+            { name: 'Stem Mixing', value: activeStemSettings.stemSeparationEnabled ? '🟢 Enabled' : '⚪ Disabled', inline: true },
+            { name: 'Vocal Ducking', value: activeStemSettings.vocalDucking ? `🟢 Enabled (${activeStemSettings.vocalDuckDb} dB)` : '⚪ Disabled', inline: true },
+            { name: 'Layered Transitions', value: activeStemSettings.layeredTransitions ? '🟢 Enabled' : '⚪ Disabled', inline: true },
+            {
+              name: 'Available Providers',
+              value: Object.entries(caps)
+                .map(([name, c]) => `• **${name.toUpperCase()}**: ${c.available ? '✅ Available' : '❌ Unavailable'} (${c.computeBackend.toUpperCase()})`)
+                .join('\n') || 'None',
+            },
+            { name: 'Track Stem Status', value: stemInfo },
+          );
+
+        await interaction.reply({ embeds: [embed] });
+      } else if (sub === 'analyze') {
+        if (!targetTrackId) {
+          await interaction.reply({ content: '❌ Please specify a track title or play a track first.', ephemeral: true });
+          return;
+        }
+
+        const current = playbackManager.getCurrentTrack(guildId);
+        const filePath = (current as any)?.path;
+        if (!filePath) {
+          await interaction.reply({ content: `❌ Cannot locate local audio file for **${targetTitle}**.`, ephemeral: true });
+          return;
+        }
+
+        const workerPool = StemWorkerPool.getInstance(playbackManager.stemManager);
+        const job = workerPool.enqueue(
+          { trackId: targetTrackId, filePath, title: targetTitle, duration: current?.duration },
+          { quality: 'balanced', storageMode: 'persistent' },
+          'HIGH',
+        );
+
+        await interaction.reply(`⏳ **Queued stem separation** for **${targetTitle}** (Job: \`${job.id.slice(0, 8)}\`)\nProcessing asynchronously in background...`);
       }
       break;
     }

@@ -17,6 +17,7 @@ import { historyRoutes } from './history.routes';
 import { playlistRoutes } from './playlist.routes';
 import { recommendationRoutes } from './recommendation.routes';
 import { transitionRoutes } from './transition.routes';
+import { stemRoutes } from './stem.routes';
 import { ArtworkService } from '../../services/artwork.service';
 
 /**
@@ -51,6 +52,7 @@ export function createRoutes(
   );
   router.use('/recommendations', recommendationRoutes(recManager, activePlaybackManager));
   router.use('/guilds', transitionRoutes(activePlaybackManager));
+  router.use('/stems', stemRoutes(activePlaybackManager, trackManager));
 
   return router;
 }

@@ -53,6 +53,13 @@ export const guildSettings = pgTable('guild_settings', {
   harmonicMixing: boolean('harmonic_mixing').notNull().default(true),
   autoTempo: boolean('auto_tempo').notNull().default(true),
   loudnessNormalize: boolean('loudness_normalize').notNull().default(true),
+  // Phase 9: Stem separation & vocal mixing settings
+  stemSeparationEnabled: boolean('stem_separation_enabled').notNull().default(true),
+  vocalClashPrevention: boolean('vocal_clash_prevention').notNull().default(true),
+  vocalDucking: boolean('vocal_ducking').notNull().default(true),
+  vocalDuckDb: real('vocal_duck_db').notNull().default(6.0),
+  layeredTransitions: boolean('layered_transitions').notNull().default(true),
+  stemProviderPreference: varchar('stem_provider_preference', { length: 32 }).notNull().default('auto'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
@@ -161,4 +168,52 @@ export const trackTransitionFeatures = pgTable('track_transition_features', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
+
+/** Track stems for Phase 9 source separation (vocals, drums, bass, other) */
+export const trackStems = pgTable('track_stems', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  trackId: uuid('track_id')
+    .notNull()
+    .references(() => tracks.id, { onDelete: 'cascade' }),
+  provider: varchar('provider', { length: 32 }).notNull(),
+  modelName: varchar('model_name', { length: 64 }).notNull(),
+  modelVersion: varchar('model_version', { length: 32 }).notNull(),
+  analysisVersion: integer('analysis_version').notNull().default(1),
+  vocalsPath: text('vocals_path').notNull(),
+  drumsPath: text('drums_path').notNull(),
+  bassPath: text('bass_path').notNull(),
+  otherPath: text('other_path').notNull(),
+  duration: real('duration').notNull(),
+  sampleRate: integer('sample_rate').notNull().default(44100),
+  channels: integer('channels').notNull().default(2),
+  vocalConfidence: real('vocal_confidence').default(0.8),
+  qualityScore: real('quality_score').default(0.85),
+  storageMode: varchar('storage_mode', { length: 20 }).notNull().default('persistent'),
+  status: varchar('status', { length: 32 }).notNull().default('READY'),
+  errorMessage: text('error_message'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }),
+});
+
+/** Track vocal features for Phase 9 vocal clash detection & ducking */
+export const trackVocalFeatures = pgTable('track_vocal_features', {
+  trackId: uuid('track_id')
+    .primaryKey()
+    .references(() => tracks.id, { onDelete: 'cascade' }),
+  featureVersion: integer('feature_version').notNull().default(1),
+  meanVocalActivity: real('mean_vocal_activity').notNull().default(0.0),
+  vocalActivityEnvelope: text('vocal_activity_envelope'), // JSON string of { t, v }[]
+  vocalStartSeconds: real('vocal_start_seconds'),
+  vocalEndSeconds: real('vocal_end_seconds'),
+  vocalIntensity: real('vocal_intensity').default(0.0),
+  vocalConfidence: real('vocal_confidence').default(0.8),
+  instrumentalOutroStart: real('instrumental_outro_start'),
+  instrumentalOutroEnd: real('instrumental_outro_end'),
+  instrumentalIntensity: real('instrumental_intensity').default(0.0),
+  analysisStatus: varchar('analysis_status', { length: 32 }).notNull().default('PENDING'),
+  errorMessage: text('error_message'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
 

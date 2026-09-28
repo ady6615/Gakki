@@ -46,5 +46,9 @@ export { TransitionFeatureManager } from './managers/transition-feature.manager'
 export { TransitionEngine } from './services/transition-engine';
 export { KeyCompatibilityService } from './services/key-compatibility.service';
 export { CuePointService } from './services/cue-point.service';
+export { StemManager } from './managers/stem.manager';
+export { VocalActivityService } from './services/vocal-activity.service';
+export { VocalClashService } from './services/vocal-clash.service';
+export { LayeredTransitionEngine } from './services/layered-transition-engine';
 
 

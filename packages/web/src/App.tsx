@@ -3,6 +3,7 @@ import { PlaybackStatus } from './components/PlaybackStatus';
 import { PlaylistSection } from './components/PlaylistSection';
 import { SmartDJSection } from './components/SmartDJSection';
 import { DJTransitionSection } from './components/DJTransitionSection';
+import { StemMixingSection } from './components/StemMixingSection';
 
 function App() {
   return (
@@ -17,6 +18,7 @@ function App() {
 
       <main className="app-main">
         <PlaybackStatus />
+        <StemMixingSection />
         <DJTransitionSection />
         <SmartDJSection />
         <PlaylistSection />
@@ -24,7 +26,7 @@ function App() {
       </main>
 
       <footer className="app-footer">
-        <p>Gakki v0.8.0 — Phase 8 Seamless Audio Mixing, Crossfading & Advanced DJ Transitions</p>
+        <p>Gakki v0.9.0 — Phase 9 Stem Separation, Vocal Clash Prevention & Layered DJ Mixing</p>
       </footer>
     </div>
   );
