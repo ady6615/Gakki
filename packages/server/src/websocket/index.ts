@@ -212,6 +212,16 @@ export function createWebSocketServer(
                 timestamp: new Date().toISOString(),
               }),
             );
+
+            activePlaybackManager.getAudioRoutingState().then((rState) => {
+              ws.send(
+                JSON.stringify({
+                  type: 'audio.routing.updated',
+                  state: rState,
+                  timestamp: new Date().toISOString(),
+                }),
+              );
+            });
           }
         }
       } catch {
@@ -276,6 +286,19 @@ export function createWebSocketServer(
         }),
       );
     }
+
+    // 5. Initial routing state
+    if (activePlaybackManager) {
+      activePlaybackManager.getAudioRoutingState().then((rState) => {
+        ws.send(
+          JSON.stringify({
+            type: 'audio.routing.updated',
+            state: rState,
+            timestamp: new Date().toISOString(),
+          }),
+        );
+      });
+    }
   });
 
   // Listen for playback, queue, settings, and lifecycle updates
@@ -298,6 +321,13 @@ export function createWebSocketServer(
 
     activePlaybackManager.onPlaybackEvent((event) => {
       broadcastEvent(event);
+    });
+
+    activePlaybackManager.onRoutingUpdate((state) => {
+      broadcastEvent({
+        type: 'audio.routing.updated',
+        state,
+      });
     });
   }
 

@@ -21,6 +21,84 @@ export function QueueSection({ queueState, guildId, onRefresh }: QueueSectionPro
   const [isUpdating, setIsUpdating] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  // Quick Play & Upload state
+  const [quickInput, setQuickInput] = useState('');
+  const [isAdding, setIsAdding] = useState(false);
+  const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const fileInputRef = React.useRef<HTMLInputElement | null>(null);
+
+  const handleAddTrack = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const trimmed = quickInput.trim();
+    if (!trimmed || !guildId || isAdding) return;
+
+    setIsAdding(true);
+    setFeedbackMsg(null);
+
+    try {
+      const res = await fetch(`/api/queue/${guildId}/tracks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ files: [trimmed], addedBy: 'Web Dashboard' }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to add track');
+      }
+
+      setQuickInput('');
+      setFeedbackMsg({
+        type: 'success',
+        text: `Queued: ${data.tracks?.[0]?.name || trimmed}`,
+      });
+      setTimeout(() => setFeedbackMsg(null), 4000);
+      onRefresh?.();
+    } catch (err: any) {
+      setFeedbackMsg({ type: 'error', text: err.message || 'Error adding track' });
+    } finally {
+      setIsAdding(false);
+    }
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !guildId || isAdding) return;
+
+    setIsAdding(true);
+    setFeedbackMsg(null);
+
+    try {
+      const res = await fetch(`/api/queue/${guildId}/upload?filename=${encodeURIComponent(file.name)}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': file.type || 'application/octet-stream',
+          'x-filename': file.name,
+        },
+        body: file,
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'File upload failed');
+      }
+
+      setFeedbackMsg({
+        type: 'success',
+        text: `Uploaded and queued: ${data.track?.name || file.name}`,
+      });
+      setTimeout(() => setFeedbackMsg(null), 4000);
+      onRefresh?.();
+    } catch (err: any) {
+      setFeedbackMsg({ type: 'error', text: err.message || 'Upload error' });
+    } finally {
+      setIsAdding(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  };
+
   // Keep localQueue in sync with incoming authoritative queueState when not dragging
   React.useEffect(() => {
     if (!isUpdating) {
@@ -189,6 +267,51 @@ export function QueueSection({ queueState, guildId, onRefresh }: QueueSectionPro
           </button>
         )}
       </div>
+
+      {/* Quick Play & Local File Ingestion Bar */}
+      <div className="queue-add-bar">
+        <form className="queue-add-form" onSubmit={handleAddTrack}>
+          <span className="queue-add-icon">🔗</span>
+          <input
+            type="text"
+            className="queue-add-input"
+            placeholder="Paste audio link (SoundCloud, Stream) or local file path..."
+            value={quickInput}
+            onChange={(e) => setQuickInput(e.target.value)}
+            disabled={isAdding}
+            aria-label="Audio URL or local file path"
+          />
+          <button
+            type="submit"
+            className="queue-add-submit-btn"
+            disabled={isAdding || !quickInput.trim()}
+          >
+            {isAdding ? 'Adding...' : 'Add to Queue'}
+          </button>
+          <button
+            type="button"
+            className="queue-upload-btn"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isAdding}
+            title="Upload local audio file from your computer"
+          >
+            📁 Choose File
+          </button>
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileUpload}
+            accept=".mp3,.wav,.ogg,.flac,.m4a,.aac"
+            style={{ display: 'none' }}
+          />
+        </form>
+      </div>
+
+      {feedbackMsg && (
+        <div className={`queue-feedback-banner ${feedbackMsg.type}`} role="status">
+          {feedbackMsg.type === 'success' ? '✓' : '⚠️'} {feedbackMsg.text}
+        </div>
+      )}
 
       {errorMessage && (
         <div className="queue-error-banner" role="alert">

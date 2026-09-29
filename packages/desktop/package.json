@@ -1,0 +1,21 @@
+{
+  "name": "@gakki/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./dist/main/main.js",
+  "scripts": {
+    "dev": "electron .",
+    "build:main": "tsc -p tsconfig.json",
+    "build": "npm run build:main",
+    "typecheck": "tsc --noEmit",
+    "pack:win": "node scripts/pack-windows.cjs"
+  },
+  "dependencies": {
+    "@gakki/core": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "electron": "^31.0.0",
+    "typescript": "^5.5.0"
+  }
+}

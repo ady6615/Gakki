@@ -5,3 +5,11 @@ dist/
 .DS_Store
 coverage/
 *.tsbuildinfo
+release/
+packages/desktop/release/
+storage/cache/
+storage/tmp/
+packages/server/storage/
+*.audio
+*.exe
+

@@ -24,7 +24,7 @@ export interface StemQualityScore {
 
 export type StemStorageMode = 'persistent' | 'temporary' | 'disabled';
 
-export interface AudioInput {
+export interface StemAudioInput {
   trackId: string;
   filePath: string;
   duration?: number;
@@ -74,9 +74,9 @@ export interface ProviderCapabilities {
 export interface StemSeparationProvider {
   readonly name: string;
   isAvailable(): Promise<boolean>;
-  supports(input: AudioInput): boolean;
+  supports(input: StemAudioInput): boolean;
   separate(
-    input: AudioInput,
+    input: StemAudioInput,
     options?: StemSeparationOptions,
   ): Promise<StemSeparationResult>;
   getCapabilities(): Promise<ProviderCapabilities>;

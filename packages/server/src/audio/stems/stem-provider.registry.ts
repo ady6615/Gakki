@@ -11,7 +11,7 @@
 import type {
   StemSeparationProvider,
   ProviderCapabilities,
-  AudioInput,
+  StemAudioInput,
   StemSeparationOptions,
   StemSeparationResult,
 } from '@gakki/core';
@@ -129,7 +129,7 @@ export class StemProviderRegistry {
   /**
    * Benchmark all available providers on a representative audio file (Requirement 2)
    */
-  public async benchmarkProviders(sampleAudio: AudioInput): Promise<BenchmarkReport> {
+  public async benchmarkProviders(sampleAudio: StemAudioInput): Promise<BenchmarkReport> {
     const results: ProviderBenchmarkResult[] = [];
     const trackDuration = sampleAudio.duration || 180;
 

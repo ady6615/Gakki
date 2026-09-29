@@ -12,6 +12,7 @@ import { StemMixingSection } from './components/StemMixingSection';
 import { DJTransitionSection } from './components/DJTransitionSection';
 import { SmartDJSection } from './components/SmartDJSection';
 import { RecordingsSection } from './components/RecordingsSection';
+import { AudioRoutingSection } from './components/AudioRoutingSection';
 import type {
   PlaybackStatePayload,
   QueueStatePayload,
@@ -44,7 +45,7 @@ const DEFAULT_SETTINGS: SettingsStatePayload = {
 };
 
 function App() {
-  const [activeMainTab, setActiveMainTab] = useState<'player' | 'library' | 'recordings' | 'analytics' | 'engine'>('player');
+  const [activeMainTab, setActiveMainTab] = useState<'player' | 'library' | 'recordings' | 'analytics' | 'engine' | 'settings'>('player');
   const [playback, setPlayback] = useState<PlaybackStatePayload>(DEFAULT_PLAYBACK);
   const [queueState, setQueueState] = useState<QueueStatePayload>(DEFAULT_QUEUE);
   const [settings, setSettings] = useState<SettingsStatePayload>(DEFAULT_SETTINGS);
@@ -169,6 +170,61 @@ function App() {
 
   const activeTrack = queueState.currentTrack || playback.track;
 
+  // Sync Desktop Tray & Native Notifications (Requirements 20 & 22)
+  useEffect(() => {
+    if (!activeTrack) return;
+    const isPlaying = playback.playerState === 'PLAYING';
+
+    if (window.gakkiDesktop?.tray?.updateNowPlaying) {
+      window.gakkiDesktop.tray.updateNowPlaying(activeTrack.name, activeTrack.artist || '', isPlaying);
+    }
+    if (window.gakkiDesktop?.notifications?.notifyTrackChange && isPlaying) {
+      window.gakkiDesktop.notifications.notifyTrackChange(activeTrack.name, activeTrack.artist || '');
+    }
+  }, [activeTrack?.name, playback.playerState]);
+
+  // Global Media Hotkeys listener from Electron main process (Requirement 21)
+  useEffect(() => {
+    if (!window.gakkiDesktop?.onMediaControl) return;
+
+    const cleanup = window.gakkiDesktop.onMediaControl(async (action: string) => {
+      if (action === 'play-pause') {
+        const isPlaying = playback.playerState === 'PLAYING';
+        await fetch(`/api/playback/${guildId}/${isPlaying ? 'pause' : 'resume'}`, { method: 'POST' });
+        refreshAuthoritativeState(guildId);
+      } else if (action === 'next') {
+        await fetch(`/api/playback/${guildId}/skip`, { method: 'POST' });
+        refreshAuthoritativeState(guildId);
+      } else if (action === 'volume-up') {
+        const nextVol = Math.min(200, settings.volume + 5);
+        await fetch(`/api/playback/${guildId}/volume`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ volume: nextVol }),
+        });
+        refreshAuthoritativeState(guildId);
+      } else if (action === 'volume-down') {
+        const nextVol = Math.max(0, settings.volume - 5);
+        await fetch(`/api/playback/${guildId}/volume`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ volume: nextVol }),
+        });
+        refreshAuthoritativeState(guildId);
+      } else if (action === 'mute') {
+        const nextVol = settings.volume > 0 ? 0 : 100;
+        await fetch(`/api/playback/${guildId}/volume`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ volume: nextVol }),
+        });
+        refreshAuthoritativeState(guildId);
+      }
+    });
+
+    return cleanup;
+  }, [playback.playerState, settings.volume, guildId]);
+
   return (
     <div className="app-container">
       {/* Top Navigation Bar */}
@@ -222,6 +278,14 @@ function App() {
             aria-selected={activeMainTab === 'engine'}
           >
             🎛️ Audio Engine & DJ
+          </button>
+          <button
+            className={`nav-tab-btn ${activeMainTab === 'settings' ? 'active' : ''}`}
+            onClick={() => setActiveMainTab('settings')}
+            role="tab"
+            aria-selected={activeMainTab === 'settings'}
+          >
+            ⚙️ Audio & Settings
           </button>
         </nav>
 
@@ -302,7 +366,7 @@ function App() {
           </div>
         )}
 
-        {/* 4. Advanced DJ & Audio Engine Tab */}
+        {/* 5. Advanced DJ & Audio Engine Tab */}
         {activeMainTab === 'engine' && (
           <div className="engine-tab-layout">
             <StemMixingSection />
@@ -312,11 +376,18 @@ function App() {
             <HealthCheck />
           </div>
         )}
+
+        {/* 6. Audio Routing & Desktop Settings Tab */}
+        {activeMainTab === 'settings' && (
+          <div className="settings-tab-layout">
+            <AudioRoutingSection onRefresh={() => refreshAuthoritativeState(guildId)} />
+          </div>
+        )}
       </main>
 
       {/* Footer */}
       <footer className="app-footer">
-        <p>Gakki Music Platform — Phase 10 Lyrics, Music Library UX & Product Polish</p>
+        <p>Gakki Music Platform — Phase 12 Desktop Application & Platform-Independent Audio Routing</p>
       </footer>
     </div>
   );

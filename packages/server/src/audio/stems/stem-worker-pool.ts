@@ -11,7 +11,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type {
-  AudioInput,
+  StemAudioInput,
   StemSeparationOptions,
   StemSeparationResult,
   TrackVocalFeatures,
@@ -27,7 +27,7 @@ export type StemJobPriority = 'HIGH' | 'LOW';
 export interface StemSeparationJob {
   id: string;
   trackId: string;
-  input: AudioInput;
+  input: StemAudioInput;
   options?: StemSeparationOptions;
   priority: StemJobPriority;
   status: StemJobStatus;
@@ -68,7 +68,7 @@ export class StemWorkerPool {
    * Enqueue a track for background stem separation. Returns job immediately without blocking.
    */
   public enqueue(
-    input: AudioInput,
+    input: StemAudioInput,
     options?: StemSeparationOptions,
     priority: StemJobPriority = 'LOW',
   ): StemSeparationJob {

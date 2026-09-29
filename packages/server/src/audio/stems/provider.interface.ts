@@ -8,7 +8,7 @@
 export type {
   StemSeparationProvider,
   ProviderCapabilities,
-  AudioInput,
+  StemAudioInput,
   StemSeparationOptions,
   StemSeparationResult,
   CanonicalStemSet,

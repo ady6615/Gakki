@@ -5,4 +5,10 @@ export * from './errors';
 export * from './transition-audio.source';
 export * from './wav-utils';
 export * from './recording-mixer';
-
+export * from './audio-output.interface';
+export * from './audio-input.interface';
+export * from './discord-audio-output';
+export * from './desktop-audio-output';
+export * from './virtual-audio-output';
+export * from './desktop-audio-input';
+export * from './desktop-platform.adapter';

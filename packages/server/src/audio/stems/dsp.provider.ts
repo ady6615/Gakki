@@ -13,7 +13,7 @@ import { randomUUID } from 'node:crypto';
 import type {
   StemSeparationProvider,
   ProviderCapabilities,
-  AudioInput,
+  StemAudioInput,
   StemSeparationOptions,
   StemSeparationResult,
   CanonicalStemSet,
@@ -40,7 +40,7 @@ export class DspStemProvider implements StemSeparationProvider {
     }
   }
 
-  public supports(input: AudioInput): boolean {
+  public supports(input: StemAudioInput): boolean {
     if (!input.filePath) return false;
     const ext = path.extname(input.filePath).toLowerCase();
     return ['.wav', '.mp3', '.flac', '.ogg', '.m4a', '.aac'].includes(ext);
@@ -60,7 +60,7 @@ export class DspStemProvider implements StemSeparationProvider {
   }
 
   public async separate(
-    input: AudioInput,
+    input: StemAudioInput,
     options?: StemSeparationOptions,
   ): Promise<StemSeparationResult> {
     const startTime = Date.now();

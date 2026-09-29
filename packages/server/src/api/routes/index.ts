@@ -28,6 +28,7 @@ import { favoritesRoutes } from './favorites.routes';
 import { libraryRoutes } from './library.routes';
 import { analyticsRoutes } from './analytics.routes';
 import { recordingRoutes } from './recording.routes';
+import { audioRoutingRoutes } from './audio-routing.routes';
 import { ArtworkService } from '../../services/artwork.service';
 import type { VoiceReceiverManager } from '../../voice';
 
@@ -59,7 +60,7 @@ export function createRoutes(
 
   router.use('/health', healthRoutes());
   router.use('/playback', playbackRoutes(manager as any));
-  router.use('/queue', queueRoutes(activePlaybackManager));
+  router.use('/queue', queueRoutes(activePlaybackManager, audioSourceManager, trackManager));
   router.use('/artwork', artworkRoutes(artworkService));
   router.use('/sources', sourceRoutes(audioSourceManager));
   router.use('/history', historyRoutes(analyticsManager));
@@ -78,6 +79,7 @@ export function createRoutes(
     '/recordings',
     recordingRoutes(recordingManager, transcriptionManager, voiceReceiver),
   );
+  router.use('/audio', audioRoutingRoutes(activePlaybackManager));
 
   return router;
 }

@@ -7,7 +7,13 @@ import type { VoicePlatformAdapter, AdapterPlayOptions } from '../types/platform
 import type {
   VoicePlatformState,
   PlaybackStatus,
+  PlaybackTarget,
+  AudioRoutingState,
 } from '../types/audio';
+import { AudioRoutingManager } from './audio-routing.manager';
+import { DesktopPlatformAdapter } from '../audio/desktop-platform.adapter';
+import { DesktopAudioOutput } from '../audio/desktop-audio-output';
+import { VirtualAudioOutput } from '../audio/virtual-audio-output';
 import type {
   QueueTrack,
   QueueUpdatedEvent,
@@ -78,6 +84,9 @@ interface GuildPlaybackSession {
  */
 export class PlaybackManager {
   private adapter: VoicePlatformAdapter | null = null;
+  private readonly adapters = new Map<string, VoicePlatformAdapter>();
+  public readonly audioRoutingManager: AudioRoutingManager;
+  private readonly routingListeners = new Set<(state: AudioRoutingState) => void>();
   private readonly currentTracks = new Map<string, QueueTrack | null>();
   private readonly endReasons = new Map<string, PlaybackEndReason>();
   private readonly isAdvancing = new Map<string, boolean>();
@@ -123,6 +132,27 @@ export class PlaybackManager {
     this.logger.debug('PlaybackManager initialized');
     this.transitionFeatureManager = transitionFeatureManager;
     this.stemManager = stemManager;
+
+    this.audioRoutingManager = new AudioRoutingManager();
+    const desktopAdapter = new DesktopPlatformAdapter({
+      desktopOutput: this.audioRoutingManager.getOutput('desktop') as DesktopAudioOutput,
+      virtualOutput: this.audioRoutingManager.getOutput('virtual') as VirtualAudioOutput,
+    });
+    this.registerAdapter(desktopAdapter);
+
+    this.audioRoutingManager.on('targetChanged', () => {
+      this.getAudioRoutingState().then((s) => this.emitRoutingUpdate(s));
+    });
+    this.audioRoutingManager.on('outputDeviceChanged', () => {
+      this.getAudioRoutingState().then((s) => this.emitRoutingUpdate(s));
+    });
+    this.audioRoutingManager.on('inputDeviceChanged', () => {
+      this.getAudioRoutingState().then((s) => this.emitRoutingUpdate(s));
+    });
+    this.audioRoutingManager.on('deviceFallback', (failed, fallback, reason) => {
+      this.logger.warn({ failed, fallback, reason }, '[ROUTING] Device fallback activated');
+      this.getAudioRoutingState().then((s) => this.emitRoutingUpdate(s));
+    });
 
     this.voiceLifecycleManager = new VoiceLifecycleManager(
       this.logger,
@@ -250,6 +280,7 @@ export class PlaybackManager {
    * Register a voice platform adapter (e.g. DiscordVoiceAdapter).
    */
   registerAdapter(adapter: VoicePlatformAdapter): void {
+    this.adapters.set(adapter.platform, adapter);
     this.adapter = adapter;
     this.logger.info({ platform: adapter.platform }, 'Voice platform adapter registered in PlaybackManager');
 
@@ -315,6 +346,104 @@ export class PlaybackManager {
 
   getAdapter(): VoicePlatformAdapter | null {
     return this.adapter;
+  }
+
+  getRegisteredAdapters(): string[] {
+    return Array.from(this.adapters.keys());
+  }
+
+  getAdapterByPlatform(platform: string): VoicePlatformAdapter | undefined {
+    return this.adapters.get(platform);
+  }
+
+  /**
+   * Switch the active playback target (Discord <-> Desktop <-> Virtual Output).
+   * Preserves current track, queue, volume, filters, and DJ state (Requirement 14).
+   */
+  async switchPlaybackTarget(target: PlaybackTarget): Promise<void> {
+    const prevTarget = this.audioRoutingManager.getActiveTarget();
+    if (prevTarget === target) return;
+
+    this.logger.info({ from: prevTarget, to: target }, '[ROUTING] Switching playback target');
+    await this.audioRoutingManager.switchTarget(target);
+
+    const prevAdapter = this.adapter;
+    let newAdapter: VoicePlatformAdapter | undefined;
+
+    if (target === 'discord') {
+      newAdapter = this.adapters.get('discord');
+    } else {
+      newAdapter = this.adapters.get('desktop');
+    }
+
+    if (!newAdapter) {
+      this.logger.warn({ target }, 'No adapter registered for target, keeping existing adapter');
+      return;
+    }
+
+    this.adapter = newAdapter;
+
+    // Seamless handoff for any active playback sessions without destroying queue or state
+    for (const [guildId, track] of this.currentTracks.entries()) {
+      if (track) {
+        const prevStatus = prevAdapter?.getPlaybackStatus(guildId);
+        const duration = prevAdapter?.getPlaybackDuration ? prevAdapter.getPlaybackDuration(guildId) : 0;
+
+        if (prevStatus === 'PLAYING') {
+          prevAdapter?.pause(guildId);
+          const source = this.createAudioSource(track);
+          await this.adapter.play(guildId, source, {
+            volume: this.getVolume(guildId),
+            filters: this.getFilters(guildId),
+            seekSeconds: duration,
+          });
+        }
+      }
+    }
+
+    const state = await this.getAudioRoutingState();
+    this.emitRoutingUpdate(state);
+  }
+
+  async getAudioRoutingState(): Promise<AudioRoutingState> {
+    return this.audioRoutingManager.getState();
+  }
+
+  async setOutputDevice(deviceId: string): Promise<void> {
+    await this.audioRoutingManager.setOutputDevice(deviceId);
+    const state = await this.getAudioRoutingState();
+    this.emitRoutingUpdate(state);
+  }
+
+  async setInputDevice(deviceId: string): Promise<void> {
+    await this.audioRoutingManager.setInputDevice(deviceId);
+    const state = await this.getAudioRoutingState();
+    this.emitRoutingUpdate(state);
+  }
+
+  setMonitoring(enabled: boolean, monitorDeviceId?: string): { success: boolean; error?: string } {
+    const result = this.audioRoutingManager.setMonitoring(enabled, monitorDeviceId);
+    if (result.success) {
+      this.getAudioRoutingState().then((state) => this.emitRoutingUpdate(state));
+    }
+    return result;
+  }
+
+  onRoutingUpdate(listener: (state: AudioRoutingState) => void): () => void {
+    this.routingListeners.add(listener);
+    return () => {
+      this.routingListeners.delete(listener);
+    };
+  }
+
+  private emitRoutingUpdate(state: AudioRoutingState): void {
+    for (const listener of this.routingListeners) {
+      try {
+        listener(state);
+      } catch (err) {
+        this.logger.error({ err }, 'Error in routing update listener');
+      }
+    }
   }
 
   private ensureAdapter(): VoicePlatformAdapter {

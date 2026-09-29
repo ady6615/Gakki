@@ -33,6 +33,7 @@ import { listLocalAudioFiles, listLocalFolders } from '../audio/local-files';
 import { enqueueFolder, enqueueMultipleFiles } from '../audio/batch-loader';
 import { globalRateLimiter } from '../security/rate-limiter';
 import { createConfiguredAudioSourceManager } from '../sources';
+import { resolveAnyAudioInput } from '../audio/track-resolver';
 import { getFFmpegCapabilities } from '../audio/ffmpeg-capabilities';
 import { StemWorkerPool } from '../audio/stems/stem-worker-pool';
 import { StemProviderRegistry } from '../audio/stems/stem-provider.registry';
@@ -888,17 +889,29 @@ export async function handleChatInputCommand(
           return;
         }
       } else {
-        source = new LocalAudioSource(input, undefined, probeAudioMetadata);
         try {
-          await source.validate();
-          const meta = await source.getMetadata();
-          trackTitle = meta.title;
-          trackDuration = meta.duration ?? undefined;
-          trackArtist = meta.artist ?? undefined;
-          trackAlbum = meta.album ?? undefined;
+          const resolved = await resolveAnyAudioInput(input, srcManager, trackManager);
+          trackTitle = resolved.name;
+          trackDuration = resolved.duration ?? undefined;
+          trackArtist = resolved.artist ?? undefined;
+          trackAlbum = resolved.album ?? undefined;
+          trackThumb = resolved.thumbnailUrl ?? undefined;
+          sourceProviderName = resolved.sourceProvider || 'Local Library';
+          trackPath = resolved.path;
+
+          if (trackPath.startsWith('http://') || trackPath.startsWith('https://')) {
+            source = new HttpAudioSource(trackPath, {
+              title: trackTitle,
+              artist: trackArtist ?? null,
+              album: trackAlbum ?? null,
+              duration: trackDuration ?? null,
+            });
+          } else {
+            source = new LocalAudioSource(trackPath, undefined, probeAudioMetadata);
+          }
         } catch (err: any) {
-          logger.warn({ err, file: input }, '[AUDIO] File validation failed');
-          await interaction.editReply(err.message || `File error for: ${input}`);
+          logger.warn({ err, file: input }, '[AUDIO] File resolution failed');
+          await interaction.editReply(err.message || `Could not find audio for: ${input}`);
           return;
         }
       }
