@@ -9,7 +9,7 @@ import {
   type TrackManager,
   type QueueTrack,
 } from '@gakki/core';
-import { enqueueFolder, enqueueMultipleFiles } from '../../audio/batch-loader';
+import { enqueueFolder, enqueueMultipleFiles, isAudioFolder } from '../../audio/batch-loader';
 import { resolveAnyAudioInput } from '../../audio/track-resolver';
 import { probeAudioMetadata } from '../../audio/ffmpeg';
 
@@ -73,6 +73,17 @@ export function queueRoutes(
       for (const item of inputs) {
         if (!item || typeof item !== 'string' || !item.trim()) continue;
         try {
+          if (isAudioFolder(item)) {
+            const folderTracks = await enqueueFolder(
+              guildId,
+              item,
+              playbackManager.queueManager,
+              addedBy || 'Web/Folder',
+            );
+            addedTracks.push(...folderTracks);
+            continue;
+          }
+
           const resolved = await resolveAnyAudioInput(item, audioSourceManager, trackManager);
           const added = playbackManager.queueManager.addTrack(guildId, {
             name: resolved.name,
@@ -224,6 +235,14 @@ export function queueRoutes(
         playbackManager.queueManager,
         addedBy,
       );
+
+      // Auto-start playback if player is currently IDLE and nothing is playing
+      const currentTrack = playbackManager.getCurrentTrack(guildId);
+      const isIdle = !currentTrack && playbackManager.getPlaybackStatus(guildId) === 'IDLE';
+      if (isIdle) {
+        playbackManager.advanceQueue(guildId).catch(() => {});
+      }
+
       res.status(201).json({
         guildId,
         folder,

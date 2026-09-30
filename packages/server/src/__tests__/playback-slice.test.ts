@@ -178,8 +178,8 @@ function createMockInteraction(options: {
     deferReply: async () => {
       isDeferred = true;
     },
-    editReply: async (content: string) => {
-      repliedText = content;
+    editReply: async (content: any) => {
+      repliedText = typeof content === 'string' ? content : content?.content || '';
       isReplied = true;
       return content;
     },

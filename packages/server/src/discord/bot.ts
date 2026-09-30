@@ -145,11 +145,19 @@ export async function createDiscordBot(
 
     // If someone joined or left the bot's voice channel, update human count
     if (oldState.channelId === botChannelId || newState.channelId === botChannelId) {
-      const channel = newState.guild.channels.cache.get(botChannelId);
-      if (channel && channel.isVoiceBased()) {
-        const humanCount = channel.members.filter((m) => !m.user.bot).size;
-        activeManager.voiceLifecycleManager.handleHumanCountChange(guildId, humanCount);
+      const guild = newState.guild || oldState.guild;
+      let humanCount = 0;
+      if (guild) {
+        for (const [userId, vs] of guild.voiceStates.cache) {
+          if (vs.channelId === botChannelId) {
+            if (userId === client?.user?.id) continue;
+            const user = client?.users.cache.get(userId) || vs.member?.user;
+            if (user?.bot) continue;
+            humanCount++;
+          }
+        }
       }
+      activeManager.voiceLifecycleManager.handleHumanCountChange(guildId, humanCount);
     }
   });
 

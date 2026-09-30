@@ -53,13 +53,75 @@ export interface ScannedAudioFile {
 }
 
 /**
- * Scan a subfolder inside storage/music for supported audio files.
- * Ignores unsupported files and subdirectories.
+ * Check if an input string refers to an existing directory (absolute or within storage/music).
+ */
+export function isAudioFolder(input: string): boolean {
+  try {
+    const trimmed = input.trim();
+    if (!trimmed) return false;
+    if (path.isAbsolute(trimmed) && fs.existsSync(trimmed)) {
+      return fs.statSync(trimmed).isDirectory();
+    }
+    const baseDir = path.resolve(resolveMusicStorageDir());
+    const cleanInput = path.normalize(trimmed).replace(/^(\/|\\)+/, '');
+    const inMusic = path.resolve(baseDir, cleanInput);
+    if (fs.existsSync(inMusic) && fs.statSync(inMusic).isDirectory()) {
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Recursively collect audio files from a directory.
+ */
+async function collectAudioFiles(dir: string, baseDir: string): Promise<ScannedAudioFile[]> {
+  const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+  const results: ScannedAudioFile[] = [];
+
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      const sub = await collectAudioFiles(fullPath, baseDir);
+      results.push(...sub);
+    } else if (entry.isFile()) {
+      const ext = path.extname(entry.name).toLowerCase();
+      if (SUPPORTED_AUDIO_EXTENSIONS.includes(ext)) {
+        const displayName = path.basename(entry.name, path.extname(entry.name));
+        const rel = path.relative(baseDir, fullPath).replace(/\\/g, '/');
+        results.push({
+          name: displayName,
+          relativePath: rel,
+          absolutePath: fullPath,
+        });
+      }
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Scan a subfolder inside storage/music or an absolute local directory for supported audio files.
  * Preserves deterministic natural filename ordering.
  */
 export async function scanFolderForAudio(folderInput: string): Promise<ScannedAudioFile[]> {
-  const { absolutePath: folderPath, relativePath: folderRelative } =
-    secureResolveMusicPath(folderInput);
+  const baseDir = path.resolve(resolveMusicStorageDir());
+  let folderPath: string;
+
+  if (path.isAbsolute(folderInput)) {
+    folderPath = path.normalize(folderInput);
+  } else {
+    const cleanInput = path.normalize(folderInput).replace(/^(\/|\\)+/, '');
+    if (cleanInput.startsWith('storage' + path.sep + 'music') || cleanInput.startsWith('storage/music')) {
+      const rootDir = path.dirname(path.dirname(baseDir));
+      folderPath = path.resolve(rootDir, cleanInput);
+    } else {
+      folderPath = path.resolve(baseDir, cleanInput);
+    }
+  }
 
   if (!fs.existsSync(folderPath)) {
     throw new Error(`Folder not found: ${folderInput}`);
@@ -70,34 +132,12 @@ export async function scanFolderForAudio(folderInput: string): Promise<ScannedAu
     throw new Error(`Path is not a directory: ${folderInput}`);
   }
 
-  const dirEntries = await fs.promises.readdir(folderPath, { withFileTypes: true });
-
-  // Filter for regular files with supported extensions
-  const audioEntries = dirEntries.filter((entry) => {
-    if (!entry.isFile()) return false;
-    const ext = path.extname(entry.name).toLowerCase();
-    return SUPPORTED_AUDIO_EXTENSIONS.includes(ext);
-  });
+  const scanned = await collectAudioFiles(folderPath, folderPath);
 
   // Sort deterministically using natural alphanumeric comparison
-  audioEntries.sort((a, b) =>
+  scanned.sort((a, b) =>
     a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }),
   );
-
-  const scanned: ScannedAudioFile[] = [];
-  for (const entry of audioEntries) {
-    const entryAbsPath = path.join(folderPath, entry.name);
-    const entryRelPath = folderRelative
-      ? `${folderRelative}/${entry.name}`.replace(/\\/g, '/')
-      : entry.name;
-    const displayName = path.basename(entry.name, path.extname(entry.name));
-
-    scanned.push({
-      name: displayName,
-      relativePath: entryRelPath,
-      absolutePath: entryAbsPath,
-    });
-  }
 
   return scanned;
 }
@@ -119,17 +159,27 @@ export async function enqueueFolder(
   const trackInputs = await Promise.all(
     scanned.map(async (file) => {
       let duration: number | undefined;
+      let title = file.name;
+      let artist: string | undefined;
+      let album: string | undefined;
+
       try {
         const probed = await probeAudioMetadata(file.absolutePath);
         duration = probed.duration ?? undefined;
+        if (probed.title) title = probed.title;
+        if (probed.artist) artist = probed.artist;
+        if (probed.album) album = probed.album;
       } catch {
         // Fallback without duration
       }
 
       return {
-        name: file.name,
-        path: file.relativePath,
+        name: title,
+        path: file.absolutePath,
         duration,
+        artist,
+        album,
+        sourceProvider: 'local',
         addedBy,
       };
     }),

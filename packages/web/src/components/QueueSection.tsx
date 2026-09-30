@@ -26,6 +26,7 @@ export function QueueSection({ queueState, guildId, onRefresh }: QueueSectionPro
   const [isAdding, setIsAdding] = useState(false);
   const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
+  const folderInputRef = React.useRef<HTMLInputElement | null>(null);
 
   const handleAddTrack = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -48,9 +49,13 @@ export function QueueSection({ queueState, guildId, onRefresh }: QueueSectionPro
       }
 
       setQuickInput('');
+      const msg =
+        data.addedCount && data.addedCount > 1
+          ? `Queued folder (${data.addedCount} tracks)`
+          : `Queued: ${data.tracks?.[0]?.name || trimmed}`;
       setFeedbackMsg({
         type: 'success',
-        text: `Queued: ${data.tracks?.[0]?.name || trimmed}`,
+        text: msg,
       });
       setTimeout(() => setFeedbackMsg(null), 4000);
       onRefresh?.();
@@ -61,41 +66,77 @@ export function QueueSection({ queueState, guildId, onRefresh }: QueueSectionPro
     }
   };
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !guildId || isAdding) return;
+  const uploadFileList = async (files: FileList | File[]) => {
+    if (!files || files.length === 0 || !guildId || isAdding) return;
+
+    const supportedExts = ['.mp3', '.wav', '.ogg', '.flac', '.m4a', '.aac'];
+    const validFiles = Array.from(files).filter((file) => {
+      const ext = '.' + file.name.split('.').pop()?.toLowerCase();
+      return supportedExts.includes(ext);
+    });
+
+    if (validFiles.length === 0) {
+      setFeedbackMsg({
+        type: 'error',
+        text: `No supported audio files found. Supported formats: ${supportedExts.join(', ')}`,
+      });
+      return;
+    }
 
     setIsAdding(true);
-    setFeedbackMsg(null);
+    let uploadedCount = 0;
 
     try {
-      const res = await fetch(`/api/queue/${guildId}/upload?filename=${encodeURIComponent(file.name)}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': file.type || 'application/octet-stream',
-          'x-filename': file.name,
-        },
-        body: file,
-      });
+      for (let i = 0; i < validFiles.length; i++) {
+        const file = validFiles[i];
+        setFeedbackMsg({
+          type: 'success',
+          text: `Uploading ${i + 1} of ${validFiles.length}: ${file.name}...`,
+        });
 
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'File upload failed');
+        const res = await fetch(`/api/queue/${guildId}/upload?filename=${encodeURIComponent(file.name)}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': file.type || 'application/octet-stream',
+            'x-filename': file.name,
+          },
+          body: file,
+        });
+
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || `Failed uploading ${file.name}`);
+        }
+        uploadedCount++;
       }
 
       setFeedbackMsg({
         type: 'success',
-        text: `Uploaded and queued: ${data.track?.name || file.name}`,
+        text: `Successfully uploaded and queued ${uploadedCount} track(s)!`,
       });
       setTimeout(() => setFeedbackMsg(null), 4000);
       onRefresh?.();
     } catch (err: any) {
-      setFeedbackMsg({ type: 'error', text: err.message || 'Upload error' });
+      setFeedbackMsg({
+        type: 'error',
+        text: `Uploaded ${uploadedCount}/${validFiles.length} files. Error: ${err.message}`,
+      });
     } finally {
       setIsAdding(false);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      if (folderInputRef.current) folderInputRef.current.value = '';
+    }
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) {
+      uploadFileList(e.target.files);
+    }
+  };
+
+  const handleFolderUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) {
+      uploadFileList(e.target.files);
     }
   };
 
@@ -293,15 +334,36 @@ export function QueueSection({ queueState, guildId, onRefresh }: QueueSectionPro
             className="queue-upload-btn"
             onClick={() => fileInputRef.current?.click()}
             disabled={isAdding}
-            title="Upload local audio file from your computer"
+            title="Upload local audio files from your computer"
           >
-            📁 Choose File
+            📁 Choose Files
           </button>
           <input
             type="file"
             ref={fileInputRef}
             onChange={handleFileUpload}
             accept=".mp3,.wav,.ogg,.flac,.m4a,.aac"
+            multiple
+            style={{ display: 'none' }}
+          />
+          <button
+            type="button"
+            className="queue-upload-btn queue-folder-btn"
+            onClick={() => folderInputRef.current?.click()}
+            disabled={isAdding}
+            title="Upload an entire music folder from your computer"
+          >
+            📂 Choose Folder
+          </button>
+          <input
+            type="file"
+            ref={folderInputRef}
+            onChange={handleFolderUpload}
+            accept=".mp3,.wav,.ogg,.flac,.m4a,.aac"
+            // @ts-expect-error webkitdirectory attribute for folder upload
+            webkitdirectory=""
+            directory=""
+            multiple
             style={{ display: 'none' }}
           />
         </form>

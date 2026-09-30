@@ -158,12 +158,34 @@ export class PlaybackManager {
       this.logger,
       {
         onAutoLeave: async (guildId, reason) => {
+          // Double check if humans are present via voice adapter
+          if (this.adapter?.getHumanCount) {
+            const humans = this.adapter.getHumanCount(guildId);
+            if (humans > 0) {
+              this.logger.info(
+                { guildId, humans },
+                '[VOICE] Auto-leave prevented — humans are active in channel',
+              );
+              this.voiceLifecycleManager.handleHumanCountChange(guildId, humans);
+              return;
+            }
+          }
+
+          // If playback is currently playing, don't auto-disconnect
+          if (this.adapter?.getPlaybackStatus && this.adapter.getPlaybackStatus(guildId) === 'PLAYING') {
+            this.logger.info(
+              { guildId },
+              '[VOICE] Auto-leave prevented — audio is actively playing',
+            );
+            return;
+          }
+
           this.logger.info(
             { guildId, reason },
             '[VOICE] Auto-leave triggered — disconnecting from voice channel',
           );
           try {
-            await this.leave(guildId);
+            await this.leave(guildId, { clearQueue: false });
           } catch (err) {
             this.logger.error({ err, guildId }, 'Error executing auto-leave');
           }
@@ -463,7 +485,7 @@ export class PlaybackManager {
     }
   }
 
-  async leave(guildId: string): Promise<void> {
+  async leave(guildId: string, options: { clearQueue?: boolean } = { clearQueue: true }): Promise<void> {
     const adapter = this.ensureAdapter();
     this.endReasons.set(guildId, 'stopped');
     await this.finalizePlaybackEvent(guildId, 'stopped');
@@ -475,7 +497,9 @@ export class PlaybackManager {
     this.currentTracks.delete(guildId);
     this.preparedTransitions.delete(guildId);
     this.isPreparingTransition.delete(guildId);
-    this.queueManager.clearQueue(guildId);
+    if (options.clearQueue !== false) {
+      this.queueManager.clearQueue(guildId);
+    }
     this.emitQueueUpdate(guildId);
   }
 

@@ -30,7 +30,8 @@ import {
 } from '@gakki/core';
 import { probeAudioMetadata } from '../audio/ffmpeg';
 import { listLocalAudioFiles, listLocalFolders } from '../audio/local-files';
-import { enqueueFolder, enqueueMultipleFiles } from '../audio/batch-loader';
+import * as path from 'node:path';
+import { enqueueFolder, enqueueMultipleFiles, isAudioFolder } from '../audio/batch-loader';
 import { globalRateLimiter } from '../security/rate-limiter';
 import { createConfiguredAudioSourceManager } from '../sources';
 import { resolveAnyAudioInput } from '../audio/track-resolver';
@@ -61,11 +62,18 @@ export const slashCommandDefinitions = [
 
   new SlashCommandBuilder()
     .setName('play')
-    .setDescription('Play a local audio file, URL, or search query')
+    .setDescription('Play a local audio file, folder, URL, or search query')
     .addStringOption((option) =>
       option
         .setName('input')
-        .setDescription('Local file name, HTTP audio URL, or SoundCloud link')
+        .setDescription('Local file name, folder path, HTTP audio URL, or SoundCloud link')
+        .setRequired(false)
+        .setAutocomplete(true),
+    )
+    .addStringOption((option) =>
+      option
+        .setName('folder')
+        .setDescription('Mention a whole music folder (name in storage/music or full local path)')
         .setRequired(false)
         .setAutocomplete(true),
     )
@@ -743,8 +751,15 @@ export async function handleChatInputCommand(
     return;
   }
 
-  const member = interaction.member as GuildMember;
-  const userVoiceChannel = member?.voice?.channel;
+  let member = interaction.member as GuildMember;
+  if ((!member || !member.voice) && interaction.guild) {
+    member = (await interaction.guild.members.fetch(interaction.user.id).catch(() => member)) as GuildMember;
+  }
+
+  let userVoiceChannel = member?.voice?.channel;
+  if (!userVoiceChannel && member?.voice?.channelId && interaction.guild) {
+    userVoiceChannel = (await interaction.guild.channels.fetch(member.voice.channelId).catch(() => null)) as any;
+  }
 
   switch (commandName) {
     case 'join': {
@@ -757,7 +772,7 @@ export async function handleChatInputCommand(
       }
 
       // Check bot permissions
-      const me = interaction.guild?.members.me;
+      const me = interaction.guild?.members.me ?? (await interaction.guild?.members.fetchMe().catch(() => null));
       if (me) {
         const perms = userVoiceChannel.permissionsFor(me);
         if (
@@ -811,7 +826,7 @@ export async function handleChatInputCommand(
           return;
         }
 
-        const me = interaction.guild?.members.me;
+        const me = interaction.guild?.members.me ?? (await interaction.guild?.members.fetchMe().catch(() => null));
         if (me) {
           const perms = userVoiceChannel.permissionsFor(me);
           if (
@@ -834,9 +849,45 @@ export async function handleChatInputCommand(
         }
       }
 
-      // Determine input to play
+      // Check if user requested a whole folder
+      const folderOption = interaction.options.getString('folder')?.trim();
       let input = interaction.options.getString('input') || interaction.options.getString('file');
-      if (!input || input.trim() === '') {
+      input = input ? input.trim() : '';
+
+      const targetFolder = folderOption || (input && isAudioFolder(input) ? input : null);
+      if (targetFolder) {
+        try {
+          const userTag = member?.displayName || interaction.user.username;
+          const addedTracks = await enqueueFolder(
+            guildId,
+            targetFolder,
+            playbackManager.queueManager,
+            userTag,
+          );
+
+          // If playback is currently idle, start playing the first track immediately
+          const currentTrack = playbackManager.getCurrentTrack(guildId);
+          const isIdle = !currentTrack && playbackManager.getPlaybackStatus(guildId) === 'IDLE';
+          if (isIdle) {
+            await playbackManager.advanceQueue(guildId);
+            const nowPlaying = playbackManager.getCurrentTrack(guildId);
+            await interaction.editReply(
+              `📁 Enqueued folder **${path.basename(targetFolder)}** (${addedTracks.length} tracks).\n▶️ Now playing: **${nowPlaying?.name || addedTracks[0].name}**`,
+            );
+          } else {
+            await interaction.editReply(
+              `📁 Added **${addedTracks.length}** track(s) from folder **${path.basename(targetFolder)}** to the queue.`,
+            );
+          }
+          return;
+        } catch (fErr: any) {
+          await interaction.editReply(`❌ Failed to enqueue folder: ${fErr.message}`);
+          return;
+        }
+      }
+
+      // Determine single input to play
+      if (!input) {
         const available = await listLocalAudioFiles();
         if (available.length === 0) {
           await interaction.editReply('No local audio files found in storage/music directory.');
@@ -844,7 +895,6 @@ export async function handleChatInputCommand(
         }
         input = available[0];
       }
-      input = input.trim();
 
       const srcManager = audioSourceManager || createConfiguredAudioSourceManager();
 

@@ -85,20 +85,23 @@ export class DiscordVoiceAdapter implements VoicePlatformAdapter {
     logger.info({ guildId, channelId }, '[VOICE] Joining channel');
     this.setVoiceState(guildId, 'CONNECTING');
 
-    const guild = this.client.guilds.cache.get(guildId);
+    const guild = this.client.guilds.cache.get(guildId) ?? await this.client.guilds.fetch(guildId).catch(() => null);
     if (!guild) {
       this.setVoiceState(guildId, 'ERROR');
       throw new Error(`Guild ${guildId} not found in Discord client cache`);
     }
 
-    const channel = guild.channels.cache.get(channelId);
+    let channel = guild.channels.cache.get(channelId);
+    if (!channel) {
+      channel = await guild.channels.fetch(channelId).catch(() => null) as any;
+    }
     if (!channel || !channel.isVoiceBased()) {
       this.setVoiceState(guildId, 'ERROR');
       throw new Error(`Voice channel ${channelId} not found in guild ${guildId}`);
     }
 
     // Verify bot permissions
-    const me = guild.members.me;
+    const me = guild.members.me ?? await guild.members.fetchMe().catch(() => null);
     if (me) {
       const permissions = channel.permissionsFor(me);
       if (
@@ -145,8 +148,8 @@ export class DiscordVoiceAdapter implements VoicePlatformAdapter {
       logger.warn({ guildId }, '[VOICE] Disconnected or reconnecting...');
       try {
         await Promise.race([
-          entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
-          entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
+          entersState(connection, VoiceConnectionStatus.Signalling, 10_000),
+          entersState(connection, VoiceConnectionStatus.Connecting, 10_000),
         ]);
         // Successfully reconnected or reconnecting
       } catch {
@@ -172,7 +175,7 @@ export class DiscordVoiceAdapter implements VoicePlatformAdapter {
 
     // Wait until connection is ready with a timeout
     try {
-      await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
+      await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
     } catch (error) {
       logger.error({ err: error, guildId }, '[ERROR] Failed to reach Ready voice connection state');
       connection.destroy();
@@ -425,10 +428,16 @@ export class DiscordVoiceAdapter implements VoicePlatformAdapter {
     const guild = this.client.guilds.cache.get(guildId);
     if (!guild) return 0;
 
-    const channel = guild.channels.cache.get(channelId);
-    if (!channel || !channel.isVoiceBased()) return 0;
-
-    return channel.members.filter((m) => !m.user.bot).size;
+    let count = 0;
+    for (const [userId, vs] of guild.voiceStates.cache) {
+      if (vs.channelId === channelId) {
+        if (userId === this.client.user?.id) continue;
+        const user = this.client.users.cache.get(userId) || vs.member?.user;
+        if (user?.bot) continue;
+        count++;
+      }
+    }
+    return count;
   }
 
   pause(guildId: string): boolean {

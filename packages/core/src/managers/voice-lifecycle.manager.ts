@@ -181,12 +181,16 @@ export class VoiceLifecycleManager {
 
   /**
    * Handle new track playback starting.
-   * Cancels any active queue-empty idle timer.
+   * Cancels any active queue-empty idle timer, and cancels empty_channel timer if humans are present.
    */
   handleTrackStarted(guildId: string): void {
     const state = this.getOrCreateState(guildId);
-    if (state.timer && state.timerReason === 'queue_empty') {
-      this.cancelTimer(guildId, 'track_started');
+    if (state.timer) {
+      if (state.timerReason === 'queue_empty') {
+        this.cancelTimer(guildId, 'track_started');
+      } else if (state.timerReason === 'empty_channel' && state.humanCount > 0) {
+        this.cancelTimer(guildId, 'track_started_with_humans');
+      }
     }
   }
 
@@ -212,6 +216,28 @@ export class VoiceLifecycleManager {
 
     const ms = state.timeoutSeconds * 1000;
     state.timer = setTimeout(async () => {
+      // Abort auto-leave if conditions changed
+      if (state.stayInChannel || !state.isBotConnected) {
+        state.timer = null;
+        state.timerReason = null;
+        state.timerStartedAt = null;
+        this.notifyUpdate(guildId);
+        return;
+      }
+
+      // If empty_channel timer fired, but humans are now present, abort auto-leave
+      if (state.timerReason === 'empty_channel' && state.humanCount > 0) {
+        this.logger.info(
+          { guildId, humanCount: state.humanCount },
+          '[VOICE] Auto-leave aborted — humans present in voice channel',
+        );
+        state.timer = null;
+        state.timerReason = null;
+        state.timerStartedAt = null;
+        this.notifyUpdate(guildId);
+        return;
+      }
+
       this.logger.info(
         { guildId, reason: state.timerReason, timeoutSeconds: state.timeoutSeconds },
         '[VOICE] Auto-leave triggered',
