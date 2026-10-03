@@ -67,37 +67,65 @@ export async function createDiscordBot(
       : (playbackManager as PlaybackManager | undefined);
 
   client.once('ready', async (readyClient) => {
+    const inviteUrl = `https://discord.com/oauth2/authorize?client_id=${readyClient.user.id}&permissions=8&scope=bot%20applications.commands`;
+
     logger.info(
-      { tag: readyClient.user.tag, guilds: readyClient.guilds.cache.size },
-      'Discord bot ready',
+      {
+        tag: readyClient.user.tag,
+        guildCount: readyClient.guilds.cache.size,
+        guilds: readyClient.guilds.cache.map((g) => ({ id: g.id, name: g.name })),
+        inviteUrl,
+      },
+      'Discord bot ready — bot can join multiple servers using inviteUrl',
     );
 
-    // Register slash commands
+    console.log('\n======================================================');
+    console.log(`🤖 Gakki Discord Bot Ready! (${readyClient.user.tag})`);
+    console.log(`🌐 Connected to ${readyClient.guilds.cache.size} server(s):`);
+    readyClient.guilds.cache.forEach((g) => console.log(`   - ${g.name} (ID: ${g.id})`));
+    console.log('\n🔗 INVITE TO MULTIPLE SERVERS:');
+    console.log(`   ${inviteUrl}`);
+    console.log('======================================================\n');
+
+    // Register slash commands globally (propagates to all joined & future guilds)
     try {
-      logger.info('Registering slash commands with Discord API...');
+      logger.info('Registering slash commands globally with Discord API...');
       await readyClient.application.commands.set(slashCommandDefinitions);
       logger.info('Global slash commands registered successfully');
 
+      // Clean up any old guild-level duplicate commands so commands only show up once
       for (const guild of readyClient.guilds.cache.values()) {
         try {
-          await guild.commands.set(slashCommandDefinitions);
-          logger.debug({ guildId: guild.id }, 'Guild slash commands registered');
-        } catch (gErr) {
-          logger.warn({ err: gErr, guildId: guild.id }, 'Failed to set commands on guild');
+          const existing = await guild.commands.fetch().catch(() => null);
+          if (existing && existing.size > 0) {
+            await guild.commands.set([]);
+            logger.debug({ guildId: guild.id }, 'Cleaned up duplicate guild-level slash commands');
+          }
+        } catch {
+          // Ignored if lacking command management permissions in this guild
         }
       }
     } catch (cmdErr) {
-      logger.error({ err: cmdErr }, 'Failed to register slash commands');
+      logger.error({ err: cmdErr }, 'Failed to register global slash commands');
     }
   });
 
   client.on('guildCreate', async (guild) => {
+    logger.info({ guildId: guild.id, name: guild.name, members: guild.memberCount }, 'Joined new Discord server!');
+    // Global commands are already available in all joined guilds.
+    // Clean up any local commands so Discord uses global commands without duplicates.
     try {
-      await guild.commands.set(slashCommandDefinitions);
-      logger.info({ guildId: guild.id, name: guild.name }, 'Slash commands registered on joined guild');
-    } catch (err) {
-      logger.warn({ err, guildId: guild.id }, 'Failed to register commands on new guild');
+      const existing = await guild.commands.fetch().catch(() => null);
+      if (existing && existing.size > 0) {
+        await guild.commands.set([]);
+      }
+    } catch {
+      // Ignored
     }
+  });
+
+  client.on('guildDelete', (guild) => {
+    logger.info({ guildId: guild.id, name: guild.name }, 'Removed from Discord server');
   });
 
   client.on('interactionCreate', async (interaction) => {
@@ -134,18 +162,19 @@ export async function createDiscordBot(
     }
   });
 
-  client.on('voiceStateUpdate', (oldState, newState) => {
+  client.on('voiceStateUpdate', async (oldState, newState) => {
     if (!activeManager) return;
-    const guildId = newState.guild?.id || oldState.guild?.id;
+    const guild = newState.guild || oldState.guild;
+    const guildId = guild?.id;
     if (!guildId) return;
 
     // Check if bot is currently connected to a voice channel in this guild
-    const botChannelId = newState.guild?.members.me?.voice.channelId;
+    const me = guild.members.me ?? await guild.members.fetchMe().catch(() => null);
+    const botChannelId = me?.voice.channelId;
     if (!botChannelId) return;
 
     // If someone joined or left the bot's voice channel, update human count
     if (oldState.channelId === botChannelId || newState.channelId === botChannelId) {
-      const guild = newState.guild || oldState.guild;
       let humanCount = 0;
       if (guild) {
         for (const [userId, vs] of guild.voiceStates.cache) {

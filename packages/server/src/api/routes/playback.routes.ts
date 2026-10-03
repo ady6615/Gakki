@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { PlaybackManager, AudioPlayerManager, LoopMode } from '@gakki/core';
 import { listLocalAudioFiles } from '../../audio/local-files';
+import { getDiscordClient } from '../../discord';
 
 export function playbackRoutes(manager?: PlaybackManager | AudioPlayerManager): Router {
   const router = Router();
@@ -25,9 +26,10 @@ export function playbackRoutes(manager?: PlaybackManager | AudioPlayerManager): 
 
   /**
    * GET /api/playback
-   * Get all active guild playback states, or default state if none active.
+   * Get active guild playback states across all connected Discord servers, or default state if none active.
+   * Supports optional ?guildId=... query parameter.
    */
-  router.get('/', (_req, res) => {
+  router.get('/', (req, res) => {
     if (!activePlaybackManager) {
       res.json({
         primary: {
@@ -41,10 +43,39 @@ export function playbackRoutes(manager?: PlaybackManager | AudioPlayerManager): 
       return;
     }
 
-    const state = activePlaybackManager.getState('');
+    const requestedGuildId = req.query.guildId as string | undefined;
+    if (requestedGuildId) {
+      const state = activePlaybackManager.getState(requestedGuildId);
+      res.json({
+        primary: state,
+        all: [state],
+      });
+      return;
+    }
+
+    const client = getDiscordClient();
+    const guildIds = client && client.isReady()
+      ? Array.from(client.guilds.cache.keys())
+      : [];
+
+    if (guildIds.length === 0) {
+      const state = activePlaybackManager.getState('');
+      res.json({
+        primary: state,
+        all: [state],
+      });
+      return;
+    }
+
+    const allStates = guildIds.map((id) => activePlaybackManager.getState(id));
+    const active =
+      allStates.find((s) => s.playerState === 'PLAYING') ||
+      allStates.find((s) => s.voiceState === 'CONNECTED') ||
+      allStates[0];
+
     res.json({
-      primary: state,
-      all: [state],
+      primary: active,
+      all: allStates,
     });
   });
 

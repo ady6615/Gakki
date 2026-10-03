@@ -29,6 +29,7 @@ import { libraryRoutes } from './library.routes';
 import { analyticsRoutes } from './analytics.routes';
 import { recordingRoutes } from './recording.routes';
 import { audioRoutingRoutes } from './audio-routing.routes';
+import { discordRoutes } from './discord.routes';
 import { ArtworkService } from '../../services/artwork.service';
 import type { VoiceReceiverManager } from '../../voice';
 
@@ -80,6 +81,7 @@ export function createRoutes(
     recordingRoutes(recordingManager, transcriptionManager, voiceReceiver),
   );
   router.use('/audio', audioRoutingRoutes(activePlaybackManager));
+  router.use('/discord', discordRoutes(activePlaybackManager));
 
   return router;
 }

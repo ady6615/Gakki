@@ -44,6 +44,15 @@ const DEFAULT_SETTINGS: SettingsStatePayload = {
   stayInChannel: false,
 };
 
+interface DiscordGuild {
+  id: string;
+  name: string;
+  icon: string | null;
+  memberCount: number;
+  botInVoice: boolean;
+  voiceChannelName: string | null;
+}
+
 function App() {
   const [activeMainTab, setActiveMainTab] = useState<'player' | 'library' | 'recordings' | 'analytics' | 'engine' | 'settings'>('player');
   const [playback, setPlayback] = useState<PlaybackStatePayload>(DEFAULT_PLAYBACK);
@@ -51,20 +60,46 @@ function App() {
   const [settings, setSettings] = useState<SettingsStatePayload>(DEFAULT_SETTINGS);
   const [wsConnected, setWsConnected] = useState<boolean>(false);
   const [isReconnecting, setIsReconnecting] = useState<boolean>(false);
+  const [discordGuilds, setDiscordGuilds] = useState<DiscordGuild[]>([]);
+  const [selectedGuildId, setSelectedGuildId] = useState<string>('');
+  const [inviteUrl, setInviteUrl] = useState<string>('');
 
   const wsRef = useRef<WebSocket | null>(null);
-  const guildId = playback.guildId || queueState.guildId || 'web-dashboard';
+  const guildId = selectedGuildId || playback.guildId || queueState.guildId || 'web-dashboard';
 
   // Authoritative State Fetcher (Requirement 26)
   const refreshAuthoritativeState = async (targetGuildId?: string) => {
     try {
-      const pRes = await fetch('/api/playback');
+      // 1. Fetch connected Discord servers & invite URL
+      try {
+        const dRes = await fetch('/api/discord/guilds');
+        if (dRes.ok) {
+          const dData = await dRes.json();
+          if (dData.guilds && Array.isArray(dData.guilds)) {
+            setDiscordGuilds(dData.guilds);
+            if (!selectedGuildId && !targetGuildId && dData.guilds.length > 0) {
+              const activeWithVoice = dData.guilds.find((g: DiscordGuild) => g.botInVoice);
+              setSelectedGuildId(activeWithVoice ? activeWithVoice.id : dData.guilds[0].id);
+            }
+          }
+          if (dData.inviteUrl) {
+            setInviteUrl(dData.inviteUrl);
+          }
+        }
+      } catch {
+        // offline or no discord
+      }
+
+      // 2. Fetch Playback State
+      const currentGid = targetGuildId || selectedGuildId;
+      const pUrl = currentGid ? `/api/playback?guildId=${encodeURIComponent(currentGid)}` : '/api/playback';
+      const pRes = await fetch(pUrl);
       if (pRes.ok) {
         const pData = await pRes.json();
         const active = pData.primary || pData;
         if (active) {
           setPlayback(active);
-          const gid = targetGuildId || active.guildId || 'web-dashboard';
+          const gid = targetGuildId || selectedGuildId || active.guildId || 'web-dashboard';
           if (gid) {
             const [qRes, sRes] = await Promise.all([
               fetch(`/api/queue/${gid}`).catch(() => null),
@@ -289,8 +324,43 @@ function App() {
           </button>
         </nav>
 
-        {/* WebSocket Reliability Status Indicator (Requirement 26) */}
+        {/* Header Controls: Server Selector, Invite Button, WebSocket Status */}
         <div className="header-status-group">
+          {discordGuilds.length > 0 && (
+            <div className="server-selector-container">
+              <span className="server-selector-icon" title="Discord Servers">🌐</span>
+              <select
+                id="server-select"
+                className="server-select-dropdown"
+                value={selectedGuildId || guildId}
+                onChange={(e) => {
+                  const newGuildId = e.target.value;
+                  setSelectedGuildId(newGuildId);
+                  refreshAuthoritativeState(newGuildId);
+                }}
+                title="Switch between Discord servers"
+              >
+                {discordGuilds.map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {g.name} {g.botInVoice ? `🔊 (${g.voiceChannelName || 'Voice'})` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {inviteUrl && (
+            <a
+              href={inviteUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="invite-bot-btn"
+              title="Add Gakki bot to another Discord server"
+            >
+              ➕ Add to Server
+            </a>
+          )}
+
           <span
             className={`ws-pill ${wsConnected ? 'connected' : isReconnecting ? 'reconnecting' : 'disconnected'}`}
             title={wsConnected ? 'WebSocket Live & Synced' : 'Reconnecting to backend...'}

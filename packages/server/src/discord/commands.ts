@@ -57,6 +57,10 @@ export function formatDuration(seconds: number | null | undefined): string {
 export const slashCommandDefinitions = [
 
   new SlashCommandBuilder()
+    .setName('invite')
+    .setDescription('Get the bot invite link to add Gakki to multiple servers'),
+
+  new SlashCommandBuilder()
     .setName('join')
     .setDescription('Join your current voice channel'),
 
@@ -751,17 +755,43 @@ export async function handleChatInputCommand(
     return;
   }
 
+  const guild = interaction.guild ?? (await interaction.client.guilds.fetch(guildId).catch(() => null));
+
   let member = interaction.member as GuildMember;
-  if ((!member || !member.voice) && interaction.guild) {
-    member = (await interaction.guild.members.fetch(interaction.user.id).catch(() => member)) as GuildMember;
+  if ((!member || !member.voice) && guild) {
+    member = (await guild.members.fetch(interaction.user.id).catch(() => member)) as GuildMember;
   }
 
   let userVoiceChannel = member?.voice?.channel;
-  if (!userVoiceChannel && member?.voice?.channelId && interaction.guild) {
-    userVoiceChannel = (await interaction.guild.channels.fetch(member.voice.channelId).catch(() => null)) as any;
+  if (!userVoiceChannel && member?.voice?.channelId && guild) {
+    userVoiceChannel = (await guild.channels.fetch(member.voice.channelId).catch(() => null)) as any;
   }
 
   switch (commandName) {
+    case 'invite': {
+      const clientId = interaction.client.user?.id || process.env.DISCORD_CLIENT_ID || '1553312697742004304';
+      const adminInviteUrl = `https://discord.com/oauth2/authorize?client_id=${clientId}&permissions=8&scope=bot%20applications.commands`;
+      const audioInviteUrl = `https://discord.com/oauth2/authorize?client_id=${clientId}&permissions=3147776&scope=bot%20applications.commands`;
+
+      const embed = new EmbedBuilder()
+        .setTitle('➕ Add Gakki to Multiple Servers')
+        .setDescription(
+          `You can easily add **Gakki** to any other server where you have **Manage Server** or **Administrator** rights!\n\n` +
+          `👑 **[Recommended: Invite with Full Permissions](${adminInviteUrl})**\n` +
+          `🎵 **[Minimal Audio/Voice Permissions Only](${audioInviteUrl})**\n\n` +
+          `**Required Bot Scopes & Permissions:**\n` +
+          `• \`bot\` and \`applications.commands\` scopes\n` +
+          `• **Connect** & **Speak** (Voice Channels)\n` +
+          `• **View Channels** & **Send Messages**\n` +
+          `• **Embed Links** & **Attach Files**`,
+        )
+        .setColor(0x5865f2)
+        .setFooter({ text: 'Ensure both "bot" and "applications.commands" scopes are selected when inviting.' });
+
+      await interaction.reply({ embeds: [embed] });
+      break;
+    }
+
     case 'join': {
       if (!userVoiceChannel) {
         await interaction.reply({
@@ -772,7 +802,7 @@ export async function handleChatInputCommand(
       }
 
       // Check bot permissions
-      const me = interaction.guild?.members.me ?? (await interaction.guild?.members.fetchMe().catch(() => null));
+      const me = guild?.members.me ?? (await guild?.members.fetchMe().catch(() => null));
       if (me) {
         const perms = userVoiceChannel.permissionsFor(me);
         if (
@@ -826,7 +856,7 @@ export async function handleChatInputCommand(
           return;
         }
 
-        const me = interaction.guild?.members.me ?? (await interaction.guild?.members.fetchMe().catch(() => null));
+        const me = guild?.members.me ?? (await guild?.members.fetchMe().catch(() => null));
         if (me) {
           const perms = userVoiceChannel.permissionsFor(me);
           if (
