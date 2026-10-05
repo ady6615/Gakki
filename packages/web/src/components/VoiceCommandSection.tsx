@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
 interface VoiceState {
   enabled: boolean;
@@ -57,15 +57,16 @@ interface MeetParticipant {
   joinedAt?: string;
 }
 
-interface CommandLog {
+interface ChatMessage {
   id: string;
+  sender: 'user' | 'gakki';
   timestamp: string;
-  transcript: string;
-  intent: string;
-  success: boolean;
-  message: string;
-  latencyMs: number;
-  provider: string;
+  text: string;
+  intent?: string;
+  success?: boolean;
+  latencyMs?: number;
+  provider?: string;
+  candidates?: string[];
 }
 
 export const VoiceCommandSection: React.FC = () => {
@@ -96,11 +97,33 @@ export const VoiceCommandSection: React.FC = () => {
   const [meetSpaceId, setMeetSpaceId] = useState<string>('abc-defg-hij');
 
   const [commandInput, setCommandInput] = useState<string>('Hey Gakki, play After Dark');
-  const [commandLogs, setCommandLogs] = useState<CommandLog[]>([]);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
+    {
+      id: 'welcome-msg',
+      sender: 'gakki',
+      timestamp: new Date().toLocaleTimeString(),
+      text: 'Hello! I am Gakki, your AI Music & Voice Agent. Say "Hey Gakki" or use the control panel below to command music playback, adjust volume, or ask questions.',
+      intent: 'READY',
+      provider: 'gemini_live',
+    },
+  ]);
   const [isProcessingCommand, setIsProcessingCommand] = useState<boolean>(false);
   const [isGeneratingDJPreview, setIsGeneratingDJPreview] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'commands' | 'dj' | 'meet'>('commands');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const chatScrollRef = useRef<HTMLDivElement | null>(null);
+
+  const scrollToBottom = () => {
+    setTimeout(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    }, 60);
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [chatMessages.length, isProcessingCommand]);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -180,6 +203,18 @@ export const VoiceCommandSection: React.FC = () => {
     const text = customTranscript || commandInput;
     if (!text.trim()) return;
 
+    const userMsg: ChatMessage = {
+      id: String(Date.now()),
+      sender: 'user',
+      timestamp: new Date().toLocaleTimeString(),
+      text: text,
+    };
+
+    setChatMessages((prev) => [...prev, userMsg]);
+    if (!customTranscript) {
+      setCommandInput('');
+    }
+
     setIsProcessingCommand(true);
     try {
       const res = await fetch('/api/voice/command', {
@@ -190,23 +225,42 @@ export const VoiceCommandSection: React.FC = () => {
 
       if (res.ok) {
         const data = await res.json();
-        const log: CommandLog = {
-          id: String(Date.now()),
+        const gakkiMsg: ChatMessage = {
+          id: String(Date.now() + 1),
+          sender: 'gakki',
           timestamp: new Date().toLocaleTimeString(),
-          transcript: text,
-          intent: data.result?.intent || 'UNKNOWN',
+          text: data.result?.message || 'Command executed successfully.',
+          intent: data.result?.intent,
           success: data.result?.success ?? true,
-          message: data.result?.message || 'Command executed',
           latencyMs: data.result?.latencyMs || 45,
           provider: data.result?.provider || 'local_deterministic',
+          candidates: data.result?.candidates,
         };
-        setCommandLogs((prev) => [log, ...prev.slice(0, 19)]);
-        showToast(`Executed: ${data.result?.message || log.intent}`);
+        setChatMessages((prev) => [...prev, gakkiMsg]);
+        showToast(`Executed: ${data.result?.message || data.result?.intent || 'Success'}`);
       } else {
         const err = await res.json();
+        const errMsg: ChatMessage = {
+          id: String(Date.now() + 1),
+          sender: 'gakki',
+          timestamp: new Date().toLocaleTimeString(),
+          text: `⚠️ Error: ${err.error || 'Failed to process command.'}`,
+          success: false,
+          intent: 'ERROR',
+        };
+        setChatMessages((prev) => [...prev, errMsg]);
         showToast(`Command error: ${err.error || 'Failed'}`);
       }
     } catch (err: any) {
+      const errMsg: ChatMessage = {
+        id: String(Date.now() + 1),
+        sender: 'gakki',
+        timestamp: new Date().toLocaleTimeString(),
+        text: `⚠️ Network error: ${err.message}`,
+        success: false,
+        intent: 'NETWORK_ERROR',
+      };
+      setChatMessages((prev) => [...prev, errMsg]);
       showToast(`Error executing command: ${err.message}`);
     } finally {
       setIsProcessingCommand(false);
@@ -345,131 +399,229 @@ export const VoiceCommandSection: React.FC = () => {
 
       {/* TAB 1: VOICE COMMANDS */}
       {activeTab === 'commands' && (
-        <div className="tab-content-grid">
-          {/* Status Indicators */}
-          <div className="voice-card">
-            <h3>Voice Pipeline State</h3>
-            <div className="pipeline-grid">
-              <div className="pipeline-item">
-                <span className="pipeline-label">Wake Word:</span>
-                <span className="pipeline-value highlight">"{voiceState.wakeWord}" (Local)</span>
+        <div className="voice-chat-stage">
+            {/* Top Pipeline Status Strip */}
+            <div className="voice-pipeline-strip">
+              <div className="strip-item">
+                <span className="strip-label">Wake Word</span>
+                <span className="strip-value highlight">"{voiceState.wakeWord}" (Local)</span>
               </div>
-              <div className="pipeline-item">
-                <span className="pipeline-label">VAD Activity:</span>
-                <span className={`pipeline-value ${voiceState.isVadActive ? 'active' : ''}`}>
+              <div className="strip-item">
+                <span className="strip-label">VAD Activity</span>
+                <span className={`strip-value ${voiceState.isVadActive ? 'active' : ''}`}>
                   {voiceState.isVadActive ? '🗣️ Speech Detected' : '🤫 Silence'}
                 </span>
               </div>
-              <div className="pipeline-item">
-                <span className="pipeline-label">Barge-in Interruption:</span>
-                <span className="pipeline-value">
-                  {voiceState.isBargeInActive ? '✅ Active (Ducks AI)' : '⏸️ AI Speaking'}
+              <div className="strip-item">
+                <span className="strip-label">Gemini Live</span>
+                <span className={`strip-value ${voiceState.geminiLiveConnected ? 'active' : ''}`}>
+                  {voiceState.geminiLiveConnected ? '⚡ Connected (24kHz)' : '🔒 Local Matcher'}
                 </span>
               </div>
-              <div className="pipeline-item">
-                <span className="pipeline-label">Gemini Live Session:</span>
-                <span className={`pipeline-value ${voiceState.geminiLiveConnected ? 'active' : ''}`}>
-                  {voiceState.geminiLiveConnected ? '⚡ Connected (24kHz)' : '🔒 Offline / Local Fallback'}
-                </span>
+              <div className="strip-item">
+                <span className="strip-label">Barge-in</span>
+                <span className="strip-value">{voiceState.isBargeInActive ? '✅ Active' : '⏸️ AI Speaking'}</span>
               </div>
-              <div className="pipeline-item">
-                <span className="pipeline-label">Input Audio Format:</span>
-                <span className="pipeline-value">16 kHz Mono Signed 16-bit PCM</span>
-              </div>
-              <div className="pipeline-item">
-                <span className="pipeline-label">Last Validated Intent:</span>
-                <span className="pipeline-value intent-tag">{voiceState.lastIntent || 'None'}</span>
+              <div className="strip-item">
+                <span className="strip-label">Input Format</span>
+                <span className="strip-value">16 kHz PCM</span>
               </div>
             </div>
 
-            <div className="privacy-badge">
-              🛡️ <strong>Privacy Architecture:</strong> Local wake-word evaluation. Microphone streams are strictly disabled when voice is toggled off. No raw audio persisted.
-            </div>
-          </div>
-
-          {/* Quick Voice Command Testing */}
-          <div className="voice-card">
-            <h3>Voice Command Simulator</h3>
-            <p className="hint-text">Test speech-to-intent execution locally or over Gemini Live:</p>
-
-            <div className="quick-command-buttons">
-              <button onClick={() => handleExecuteCommand('Hey Gakki, play After Dark')}>
-                ▶️ Play After Dark
-              </button>
-              <button onClick={() => handleExecuteCommand('Hey Gakki, pause')}>
-                ⏸️ Pause
-              </button>
-              <button onClick={() => handleExecuteCommand('Hey Gakki, resume')}>
-                ⏯️ Resume
-              </button>
-              <button onClick={() => handleExecuteCommand('Hey Gakki, skip')}>
-                ⏭️ Skip
-              </button>
-              <button onClick={() => handleExecuteCommand('Hey Gakki, smart shuffle')}>
-                🔀 Smart Shuffle
-              </button>
-              <button onClick={() => handleExecuteCommand('Hey Gakki, enable dj')}>
-                🎧 Enable DJ
-              </button>
-              <button onClick={() => handleExecuteCommand('Hey Gakki, show lyrics')}>
-                📜 Lyrics
-              </button>
-              <button onClick={() => handleExecuteCommand('Hey Gakki, what should I play next?')}>
-                💬 What to play next?
-              </button>
-            </div>
-
-            <div className="command-input-row">
-              <input
-                type="text"
-                className="command-input"
-                value={commandInput}
-                onChange={(e) => setCommandInput(e.target.value)}
-                placeholder="Type or speak a voice command..."
-                onKeyDown={(e) => e.key === 'Enter' && handleExecuteCommand()}
-              />
-              <button
-                className="btn-send-command"
-                disabled={isProcessingCommand}
-                onClick={() => handleExecuteCommand()}
-              >
-                {isProcessingCommand ? 'Processing...' : 'Send Voice Command'}
-              </button>
-            </div>
-          </div>
-
-          {/* Command Execution Log */}
-          <div className="voice-card full-width">
-            <h3>Recent Voice Command Executions</h3>
-            {commandLogs.length === 0 ? (
-              <p className="empty-text">No voice commands executed in this session yet.</p>
-            ) : (
-              <div className="command-log-table">
-                <div className="log-header">
-                  <span>Time</span>
-                  <span>Transcript</span>
-                  <span>Validated Intent</span>
-                  <span>Result Message</span>
-                  <span>Provider</span>
-                  <span>Latency</span>
+            {/* Conversational Chat Container with Sticky Bottom Control Panel */}
+            <div className="voice-chat-container">
+              {/* Scrollable Chat Stream */}
+              <div className="voice-chat-messages" ref={chatScrollRef}>
+                <div className="chat-intro-card">
+                  <div className="chat-intro-avatar">🤖</div>
+                  <div className="chat-intro-content">
+                    <h4>Gakki Voice Agent & Gemini Live</h4>
+                    <p>
+                      Speak <code className="wake-code">"Hey Gakki"</code> followed by your command, or use the
+                      control panel docked at the bottom to send natural voice commands.
+                    </p>
+                    <div className="privacy-pill">
+                      🛡️ Local wake-word evaluation • Zero persistent audio recording • Backend permissions enforced
+                    </div>
+                  </div>
                 </div>
-                {commandLogs.map((log) => (
-                  <div key={log.id} className="log-row">
-                    <span className="log-time">{log.timestamp}</span>
-                    <span className="log-transcript">"{log.transcript}"</span>
-                    <span className="log-intent">{log.intent}</span>
-                    <span className={`log-msg ${log.success ? 'success' : 'error'}`}>
-                      {log.message}
-                    </span>
-                    <span className="log-provider">{log.provider}</span>
-                    <span className="log-latency">{log.latencyMs}ms</span>
+
+                {chatMessages.map((msg) => (
+                  <div
+                    key={msg.id}
+                    className={`chat-bubble-wrapper ${msg.sender === 'user' ? 'user-msg' : 'gakki-msg'}`}
+                  >
+                    <div className="chat-bubble-avatar">
+                      {msg.sender === 'user' ? '👤' : '🤖'}
+                    </div>
+                    <div className="chat-bubble-body">
+                      <div className="chat-bubble-meta">
+                        <span className="chat-bubble-sender">
+                          {msg.sender === 'user' ? 'You' : 'Gakki Assistant'}
+                        </span>
+                        <span className="chat-bubble-time">{msg.timestamp}</span>
+                        {msg.intent && <span className="chat-bubble-intent">{msg.intent}</span>}
+                        {msg.provider && <span className="chat-bubble-provider">{msg.provider}</span>}
+                        {msg.latencyMs != null && (
+                          <span className="chat-bubble-latency">{msg.latencyMs}ms</span>
+                        )}
+                      </div>
+                      <div className="chat-bubble-text">{msg.text}</div>
+
+                      {/* Ambiguity Choices if returned */}
+                      {msg.candidates && msg.candidates.length > 0 && (
+                        <div className="chat-candidates-box">
+                          <span className="candidates-title">Select an option:</span>
+                          <div className="candidates-buttons">
+                            {msg.candidates.map((cand, idx) => (
+                              <button
+                                key={idx}
+                                className="candidate-choice-btn"
+                                onClick={() => handleExecuteCommand(String(idx + 1))}
+                              >
+                                {idx + 1}. {cand}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 ))}
+
+                {isProcessingCommand && (
+                  <div className="chat-bubble-wrapper gakki-msg processing">
+                    <div className="chat-bubble-avatar">🤖</div>
+                    <div className="chat-bubble-body">
+                      <div className="chat-bubble-text typing-indicator">
+                        <span>●</span>
+                        <span>●</span>
+                        <span>●</span>
+                        <em>Processing voice intent...</em>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* ALWAYS-AT-BOTTOM CONTROL PANEL: Positioned right below the newest chats */}
+                <div
+                  key={`control-panel-${chatMessages.length}-${isProcessingCommand}`}
+                  className="voice-chat-control-panel in-stream"
+                >
+                  {/* Quick Command Suggestions Chips */}
+                  <div className="control-quick-chips">
+                    <span className="chips-label">Quick Commands:</span>
+                    <div className="chips-scroll">
+                      <button
+                        className="quick-chip"
+                        onClick={() => handleExecuteCommand('Hey Gakki, play After Dark')}
+                      >
+                        ▶️ Play After Dark
+                      </button>
+                      <button
+                        className="quick-chip"
+                        onClick={() => handleExecuteCommand('Hey Gakki, pause')}
+                      >
+                        ⏸️ Pause
+                      </button>
+                      <button
+                        className="quick-chip"
+                        onClick={() => handleExecuteCommand('Hey Gakki, resume')}
+                      >
+                        ⏯️ Resume
+                      </button>
+                      <button
+                        className="quick-chip"
+                        onClick={() => handleExecuteCommand('Hey Gakki, skip')}
+                      >
+                        ⏭️ Skip
+                      </button>
+                      <button
+                        className="quick-chip"
+                        onClick={() => handleExecuteCommand('Hey Gakki, smart shuffle')}
+                      >
+                        🔀 Smart Shuffle
+                      </button>
+                      <button
+                        className="quick-chip"
+                        onClick={() => handleExecuteCommand('Hey Gakki, enable dj')}
+                      >
+                        🎧 Enable DJ
+                      </button>
+                      <button
+                        className="quick-chip"
+                        onClick={() => handleExecuteCommand('Hey Gakki, show lyrics')}
+                      >
+                        📜 Lyrics
+                      </button>
+                      <button
+                        className="quick-chip"
+                        onClick={() => handleExecuteCommand('Hey Gakki, what should I play next?')}
+                      >
+                        💬 What next?
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Main Input Control Bar */}
+                  <div className="control-input-bar">
+                    <button
+                      className={`btn-mic-indicator ${voiceState.enabled ? 'listening' : 'muted'}`}
+                      onClick={handleToggleVoice}
+                      title={voiceState.enabled ? 'Mic is Active (Click to mute)' : 'Mic is Muted (Click to enable)'}
+                    >
+                      <span className="mic-icon">{voiceState.enabled ? '🎙️' : '🔇'}</span>
+                      <span className="mic-pulse" />
+                    </button>
+
+                    <input
+                      type="text"
+                      className="control-text-input"
+                      value={commandInput}
+                      onChange={(e) => setCommandInput(e.target.value)}
+                      placeholder="Type or speak a command (e.g. 'Hey Gakki, play After Dark')..."
+                      onKeyDown={(e) => e.key === 'Enter' && handleExecuteCommand()}
+                    />
+
+                    {chatMessages.length > 0 && (
+                      <button
+                        className="btn-clear-chat"
+                        onClick={() => setChatMessages([])}
+                        title="Clear chat history"
+                      >
+                        🗑️
+                      </button>
+                    )}
+
+                    <button
+                      className="btn-send-voice"
+                      disabled={isProcessingCommand || !commandInput.trim()}
+                      onClick={() => handleExecuteCommand()}
+                    >
+                      {isProcessingCommand ? (
+                        <span className="sending-spinner">⏳ Sending...</span>
+                      ) : (
+                        <span>Send Command ↵</span>
+                      )}
+                    </button>
+                  </div>
+
+                  {/* Footer status / shortcuts helper */}
+                  <div className="control-panel-footer">
+                    <span className="shortcut-hint">
+                      💡 Tip: Say <strong>"Hey Gakki"</strong> or press <strong>Enter ↵</strong> to dispatch
+                    </span>
+                    <span className="latency-hint">
+                      Last Intent: <strong className="highlight">{voiceState.lastIntent || 'None'}</strong>
+                    </span>
+                  </div>
+                </div>
+
+                <div ref={messagesEndRef} style={{ height: '1px', minHeight: '1px' }} />
               </div>
-            )}
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
       {/* TAB 2: AI DJ COMMENTARY */}
       {activeTab === 'dj' && (
