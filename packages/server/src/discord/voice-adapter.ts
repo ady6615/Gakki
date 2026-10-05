@@ -586,6 +586,34 @@ export class DiscordVoiceAdapter implements VoicePlatformAdapter {
     }
   }
 
+  getCapabilities(): import('@gakki/core').VoicePlatformCapabilities {
+    return {
+      sendAudio: true,
+      receiveAudio: true,
+      receiveVideo: false,
+      participantMetadata: true,
+      recording: true,
+    };
+  }
+
+  getParticipants(guildId?: string): import('@gakki/core').PlatformParticipant[] {
+    if (!this.client || !guildId) return [];
+    const channelId = this.channelIds.get(guildId);
+    if (!channelId) return [];
+
+    const channel = this.client.channels?.cache?.get(channelId);
+    if (channel && 'members' in channel && channel.members) {
+      return Array.from((channel.members as any).values()).map((m: any) => ({
+        platform: 'discord',
+        platformParticipantId: m.id,
+        displayName: m.displayName || m.user?.username || 'Discord User',
+        avatarUrl: m.user?.displayAvatarURL?.(),
+        joinedAt: new Date(),
+      }));
+    }
+    return [];
+  }
+
   private setVoiceState(guildId: string, state: CoreVoiceStatus): void {
     this.voiceStates.set(guildId, state);
     this.emitState(guildId);

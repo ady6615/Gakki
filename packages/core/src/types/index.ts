@@ -13,3 +13,5 @@ export * from './favorite';
 export * from './recording';
 export * from './permissions';
 export * from './library';
+export * from './voice-command';
+export * from './dj-commentary';

@@ -19,7 +19,8 @@
     "test:phase7": "tsx packages/server/src/__tests__/phase7.test.ts",
     "test:phase8": "tsx packages/server/src/__tests__/phase8.test.ts",
     "test:transitions": "tsx packages/server/src/scripts/test-transitions.ts",
-    "test:phase12": "tsx packages/server/src/__tests__/phase12.test.ts"
+    "test:phase12": "tsx packages/server/src/__tests__/phase12.test.ts",
+    "test:phase13": "tsx packages/server/src/__tests__/phase13.test.ts"
   },
   "engines": {
     "node": ">=20.0.0"

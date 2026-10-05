@@ -22,6 +22,10 @@ import {
   TranscriptionProviderRegistry,
   MockTranscriptionProvider,
   WhisperLocalProvider,
+  VoiceCommandEngine,
+  DJCommentaryEngine,
+  TTSProviderRegistry,
+  VoiceSessionManager,
 } from '@gakki/core';
 import { createApiServer } from './api/server';
 import { createDiscordBot, DiscordVoiceAdapter } from './discord';
@@ -34,6 +38,10 @@ import { TransitionProcessor } from './audio/transition-processor';
 import { StemProviderRegistry } from './audio/stems/stem-provider.registry';
 import { StemWorkerPool } from './audio/stems/stem-worker-pool';
 import { VoiceReceiverManager } from './voice';
+import { MeetVoiceAdapter } from './meet/meet-voice.adapter';
+import { MeetOAuthService } from './meet/meet-oauth.service';
+import { GeminiLiveVoiceProvider } from './voice/gemini-live-voice.provider';
+import { VoiceRateLimiter } from './security/voice-rate-limiter';
 
 const logger = createLogger('main');
 
@@ -251,6 +259,206 @@ async function main(): Promise<void> {
     (event: any) => broadcastEvent(event),
   );
 
+  // ── Phase 13: Voice Commands, Gemini Voice Agent & Google Meet ──
+  const voiceSessionManager = new VoiceSessionManager();
+  const ttsRegistry = new TTSProviderRegistry();
+  const djCommentaryEngine = new DJCommentaryEngine(ttsRegistry, {
+    enabled: true,
+    cooldownSeconds: 180,
+    mixingMode: 'BETWEEN_SONGS',
+    voiceProfile: 'Puck',
+  });
+
+  const meetOAuthService = new MeetOAuthService();
+  const meetAdapter = new MeetVoiceAdapter({
+    oauthService: meetOAuthService,
+    recordingManager: recordingManager,
+    transcriptionManager: transcriptionManager,
+  });
+  playbackManager.registerAdapter(meetAdapter);
+  voiceSessionManager.registerAdapter(meetAdapter);
+
+  const geminiLiveProvider = new GeminiLiveVoiceProvider();
+  const voiceRateLimiter = new VoiceRateLimiter();
+  const voiceCommandEngine = new VoiceCommandEngine();
+  voiceCommandEngine.setGeminiProvider(geminiLiveProvider);
+  geminiLiveProvider.setVoiceResponseOutput(voiceCommandEngine.getVoiceResponseOutput());
+
+  // Wire VoiceCommandEngine callbacks to Playback & Music Engines
+  voiceCommandEngine.setMusicCallbacks({
+    playTrack: async (query, context) => {
+      const gid = context.guildId || 'desktop-local';
+      try {
+        const found = await audioSourceManager.search(query, { limit: 1 });
+        if (found && found.length > 0) {
+          const item = found[0];
+          const source = playbackManager.createAudioSource({
+            id: item.sourceUrl,
+            trackId: item.sourceUrl,
+            name: item.title,
+            path: item.sourceUrl,
+            duration: item.duration ?? undefined,
+            artist: item.artist,
+            album: item.album,
+          } as any);
+
+          await playbackManager.play(gid, source, {
+            trackId: item.sourceUrl,
+            name: item.title,
+            path: item.sourceUrl,
+            artist: item.artist,
+            album: item.album,
+            addedBy: context.userDisplayName || 'Voice Command',
+          });
+          return { success: true, trackName: item.title };
+        }
+        return { success: false, error: 'No track found matching search' };
+      } catch (err: any) {
+        return { success: false, error: err.message };
+      }
+    },
+    pause: async (context) => {
+      const gid = context.guildId || 'desktop-local';
+      return playbackManager.pause(gid);
+    },
+    resume: async (context) => {
+      const gid = context.guildId || 'desktop-local';
+      return playbackManager.resume(gid);
+    },
+    skip: async (context) => {
+      const gid = context.guildId || 'desktop-local';
+      const skipRes = await playbackManager.skip(gid);
+      return Boolean(skipRes && skipRes.skipped);
+    },
+    stop: async (context) => {
+      const gid = context.guildId || 'desktop-local';
+      return playbackManager.stop(gid);
+    },
+    setVolume: async (vol, context) => {
+      const gid = context.guildId || 'desktop-local';
+      playbackManager.setVolume(gid, vol);
+      return true;
+    },
+    smartShuffle: async (context) => {
+      const gid = context.guildId || 'desktop-local';
+      try {
+        await recManager.smartShuffle(
+          gid,
+          playbackManager.queueManager.inspectQueue(gid),
+          playbackManager.getCurrentTrack(gid) as any,
+        );
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    enableDJ: async (context) => {
+      const gid = context.guildId || 'desktop-local';
+      recManager.djManager.configureDJ(gid, { enabled: true });
+      return true;
+    },
+    disableDJ: async (context) => {
+      const gid = context.guildId || 'desktop-local';
+      recManager.djManager.configureDJ(gid, { enabled: false });
+      return true;
+    },
+    playPlaylist: async (name, context) => {
+      const gid = context.guildId || 'desktop-local';
+      try {
+        const { userPlaylists, guildPlaylists } = await playlistManager.listPlaylists({ guildId: gid });
+        const allPlaylists = [...userPlaylists, ...guildPlaylists];
+        const matched = allPlaylists.find((p) => p.name.toLowerCase() === name.toLowerCase());
+        if (matched) {
+          const fullPlaylist = await playlistManager.getPlaylist(matched.id);
+          if (fullPlaylist && fullPlaylist.tracks) {
+            for (const pt of fullPlaylist.tracks) {
+              const track = await trackManager.getTrackById(pt.trackId);
+              if (track) {
+                const primarySource = await trackManager.getPrimarySourceByTrackId(track.id);
+                if (primarySource) {
+                  playbackManager.queueManager.enqueue(gid, {
+                    id: track.id,
+                    trackId: track.id,
+                    name: track.title,
+                    path: primarySource.sourceUrl,
+                    artist: track.artist,
+                    duration: track.duration || undefined,
+                    addedBy: 'Voice Playlist',
+                  });
+                }
+              }
+            }
+            return true;
+          }
+        }
+        return false;
+      } catch {
+        return false;
+      }
+    },
+    showLyrics: async (context) => {
+      const gid = context.guildId || 'desktop-local';
+      const current = playbackManager.getCurrentTrack(gid);
+      if (!current) return { success: false };
+      try {
+        const lyr = await lyricsManager.getLyrics({ title: current.name, artist: current.artist || undefined });
+        return { success: Boolean(lyr), lyrics: lyr?.plainLyrics || undefined };
+      } catch {
+        return { success: false };
+      }
+    },
+    saveFavorite: async (context) => {
+      const gid = context.guildId || 'desktop-local';
+      const current = playbackManager.getCurrentTrack(gid);
+      if (!current || !favoritesManager || !current.id) return false;
+      try {
+        await favoritesManager.addFavorite(context.userId || 'user_local', current.id);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    setLoop: async (mode, context) => {
+      const gid = context.guildId || 'desktop-local';
+      if (guildSettingsManager) {
+        const curr = await guildSettingsManager.getSettings(gid);
+        curr.loopMode = mode;
+        await guildSettingsManager.saveSettings(curr);
+      }
+      return true;
+    },
+    searchLibrary: async (query) => {
+      try {
+        const results = await audioSourceManager.search(query, { limit: 5 });
+        return results.map((t, idx) => ({
+          id: t.sourceUrl || `track_${idx}`,
+          title: t.title,
+          artist: t.artist,
+          duration: t.duration,
+        }));
+      } catch {
+        return [];
+      }
+    },
+  });
+
+  // Forward Voice Events to WebSockets
+  voiceCommandEngine.on('wake_word_detected', (data) => {
+    broadcastEvent({ type: 'voice.wake_word.detected', ...data });
+  });
+  voiceCommandEngine.on('intent_executed', (data) => {
+    broadcastEvent({ type: 'voice.intent.executed', ...data });
+  });
+  voiceCommandEngine.on('barge_in', (data) => {
+    broadcastEvent({ type: 'voice.barge_in', ...data });
+  });
+  voiceCommandEngine.on('state_changed', (state) => {
+    broadcastEvent({ type: 'voice.state.updated', state });
+  });
+  djCommentaryEngine.on('commentary_pregenerated', (data) => {
+    broadcastEvent({ type: 'dj.commentary.generated', ...data });
+  });
+
   // ── API Server ─────────────────────────────────────────────────
   const { server } = createApiServer(
     config.API_PORT,
@@ -267,6 +475,12 @@ async function main(): Promise<void> {
     recordingManager,
     transcriptionManager,
     voiceReceiver,
+    voiceCommandEngine,
+    djCommentaryEngine,
+    voiceSessionManager,
+    meetAdapter,
+    geminiLiveProvider,
+    voiceRateLimiter,
   );
 
   // ── WebSocket ──────────────────────────────────────────────────

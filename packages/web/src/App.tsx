@@ -13,6 +13,7 @@ import { DJTransitionSection } from './components/DJTransitionSection';
 import { SmartDJSection } from './components/SmartDJSection';
 import { RecordingsSection } from './components/RecordingsSection';
 import { AudioRoutingSection } from './components/AudioRoutingSection';
+import { VoiceCommandSection } from './components/VoiceCommandSection';
 import type {
   PlaybackStatePayload,
   QueueStatePayload,
@@ -54,7 +55,7 @@ interface DiscordGuild {
 }
 
 function App() {
-  const [activeMainTab, setActiveMainTab] = useState<'player' | 'library' | 'recordings' | 'analytics' | 'engine' | 'settings'>('player');
+  const [activeMainTab, setActiveMainTab] = useState<'player' | 'library' | 'recordings' | 'voice' | 'analytics' | 'engine' | 'settings'>('player');
   const [playback, setPlayback] = useState<PlaybackStatePayload>(DEFAULT_PLAYBACK);
   const [queueState, setQueueState] = useState<QueueStatePayload>(DEFAULT_QUEUE);
   const [settings, setSettings] = useState<SettingsStatePayload>(DEFAULT_SETTINGS);
@@ -299,6 +300,14 @@ function App() {
             🎙️ Recordings
           </button>
           <button
+            className={`nav-tab-btn ${activeMainTab === 'voice' ? 'active' : ''}`}
+            onClick={() => setActiveMainTab('voice')}
+            role="tab"
+            aria-selected={activeMainTab === 'voice'}
+          >
+            🎤 Voice & Meet
+          </button>
+          <button
             className={`nav-tab-btn ${activeMainTab === 'analytics' ? 'active' : ''}`}
             onClick={() => setActiveMainTab('analytics')}
             role="tab"
@@ -429,14 +438,21 @@ function App() {
           </div>
         )}
 
-        {/* 4. Statistics Tab */}
+        {/* 4. Voice Commands, Gemini & Meet Tab (Phase 13) */}
+        {activeMainTab === 'voice' && (
+          <div className="voice-tab-layout">
+            <VoiceCommandSection />
+          </div>
+        )}
+
+        {/* 5. Statistics Tab */}
         {activeMainTab === 'analytics' && (
           <div className="analytics-tab-layout">
             <AnalyticsDashboard guildId={guildId} />
           </div>
         )}
 
-        {/* 5. Advanced DJ & Audio Engine Tab */}
+        {/* 6. Advanced DJ & Audio Engine Tab */}
         {activeMainTab === 'engine' && (
           <div className="engine-tab-layout">
             <StemMixingSection />
@@ -447,7 +463,7 @@ function App() {
           </div>
         )}
 
-        {/* 6. Audio Routing & Desktop Settings Tab */}
+        {/* 7. Audio Routing & Desktop Settings Tab */}
         {activeMainTab === 'settings' && (
           <div className="settings-tab-layout">
             <AudioRoutingSection onRefresh={() => refreshAuthoritativeState(guildId)} />
@@ -457,7 +473,7 @@ function App() {
 
       {/* Footer */}
       <footer className="app-footer">
-        <p>Gakki Music Platform — Phase 12 Desktop Application & Platform-Independent Audio Routing</p>
+        <p>Gakki Music Platform — Phase 13 Voice Commands, Gemini Voice Agent & Google Meet Integration</p>
       </footer>
     </div>
   );

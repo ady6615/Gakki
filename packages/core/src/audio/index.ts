@@ -12,3 +12,6 @@ export * from './desktop-audio-output';
 export * from './virtual-audio-output';
 export * from './desktop-audio-input';
 export * from './desktop-platform.adapter';
+export * from './audio-resampler';
+export * from './vad-detector';
+export * from './wake-word-detector';

@@ -45,6 +45,12 @@ export function createApiServer(
   recordingManager?: RecordingManager,
   transcriptionManager?: TranscriptionManager,
   voiceReceiver?: any,
+  voiceCommandEngine?: any,
+  djCommentaryEngine?: any,
+  voiceSessionManager?: any,
+  meetAdapter?: any,
+  geminiProvider?: any,
+  rateLimiter?: any,
 ): { app: express.Application; server: http.Server } {
   const app = express();
 
@@ -69,6 +75,12 @@ export function createApiServer(
       recordingManager,
       transcriptionManager,
       voiceReceiver,
+      voiceCommandEngine,
+      djCommentaryEngine,
+      voiceSessionManager,
+      meetAdapter,
+      geminiProvider,
+      rateLimiter,
     ),
   );
 

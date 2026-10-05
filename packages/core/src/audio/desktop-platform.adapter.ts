@@ -190,6 +190,27 @@ export class DesktopPlatformAdapter implements VoicePlatformAdapter {
     return this.currentTrack;
   }
 
+  getCapabilities(): import('../types/platform').VoicePlatformCapabilities {
+    return {
+      sendAudio: true,
+      receiveAudio: true,
+      receiveVideo: false,
+      participantMetadata: false,
+      recording: false,
+    };
+  }
+
+  getParticipants(_guildId?: string): import('../types/platform').PlatformParticipant[] {
+    return [
+      {
+        platform: 'desktop',
+        platformParticipantId: 'desktop-local-user',
+        displayName: 'Local Desktop User',
+        joinedAt: new Date(),
+      },
+    ];
+  }
+
   getState(_guildId?: string): VoicePlatformState {
     return {
       guildId: this.currentGuildId,

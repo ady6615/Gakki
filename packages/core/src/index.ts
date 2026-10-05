@@ -60,5 +60,22 @@ export { computeLyricsMatchConfidence, normalizeSongString, stringSimilarity } f
 export { AudioRoutingManager } from './managers/audio-routing.manager';
 export * from './transcription';
 
-
-
+// Phase 13: Voice Commands, Gemini Voice Agent & AI DJ Commentary
+export { VoiceCommandEngine, type MusicEngineCallbacks } from './voice/voice-command-engine';
+export { VoiceResponseOutput } from './voice/voice-response-output';
+export { LocalCommandMatcher } from './voice/local-command-matcher';
+export {
+  VoiceIntentSchema,
+  INTENT_PERMISSION_MAP,
+  WHITELISTED_VOICE_TOOLS,
+  PROHIBITED_FUNCTION_NAMES,
+  validateVoiceIntent,
+} from './voice/intent-schema';
+export { DJCommentaryEngine } from './dj/dj-commentary-engine';
+export { DJTextGenerator } from './dj/dj-text-generator';
+export { CommentaryMixer } from './dj/commentary-mixer';
+export { type TTSProvider } from './dj/tts/tts-provider.interface';
+export { LocalTTSProvider } from './dj/tts/local-tts.provider';
+export { GeminiTTSProvider } from './dj/tts/gemini-tts.provider';
+export { TTSProviderRegistry } from './dj/tts/tts-provider.registry';
+export { VoiceSessionManager } from './managers/voice-session.manager';

@@ -30,8 +30,13 @@ import { analyticsRoutes } from './analytics.routes';
 import { recordingRoutes } from './recording.routes';
 import { audioRoutingRoutes } from './audio-routing.routes';
 import { discordRoutes } from './discord.routes';
+import { createVoiceCommandRouter } from './voice-command.routes';
 import { ArtworkService } from '../../services/artwork.service';
 import type { VoiceReceiverManager } from '../../voice';
+import type { VoiceCommandEngine, DJCommentaryEngine, VoiceSessionManager } from '@gakki/core';
+import type { MeetVoiceAdapter } from '../../meet/meet-voice.adapter';
+import type { GeminiLiveVoiceProvider } from '../../voice/gemini-live-voice.provider';
+import type { VoiceRateLimiter } from '../../security/voice-rate-limiter';
 
 /**
  * Top-level API router.
@@ -51,6 +56,12 @@ export function createRoutes(
   recordingManager?: RecordingManager,
   transcriptionManager?: TranscriptionManager,
   voiceReceiver?: VoiceReceiverManager,
+  voiceCommandEngine?: VoiceCommandEngine,
+  djCommentaryEngine?: DJCommentaryEngine,
+  voiceSessionManager?: VoiceSessionManager,
+  meetAdapter?: MeetVoiceAdapter,
+  geminiProvider?: GeminiLiveVoiceProvider,
+  rateLimiter?: VoiceRateLimiter,
 ): Router {
   const router = Router();
 
@@ -82,6 +93,19 @@ export function createRoutes(
   );
   router.use('/audio', audioRoutingRoutes(activePlaybackManager));
   router.use('/discord', discordRoutes(activePlaybackManager));
+
+  if (voiceCommandEngine && djCommentaryEngine && voiceSessionManager) {
+    const voiceRouter = createVoiceCommandRouter(
+      voiceCommandEngine,
+      djCommentaryEngine,
+      voiceSessionManager,
+      meetAdapter,
+      geminiProvider,
+      rateLimiter,
+    );
+    router.use('/voice', voiceRouter);
+    router.use('/meet', voiceRouter);
+  }
 
   return router;
 }
