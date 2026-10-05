@@ -16,8 +16,19 @@ import {
   slashCommandDefinitions,
   handleChatInputCommand,
   handleAutocomplete,
+  formatDuration,
 } from './commands';
+import {
+  handleControlPanelButton,
+  handleControlPanelSelectMenu,
+  handleControlPanelModal,
+  spawnControlPanelInChannel,
+  refreshPanel,
+} from './control-panel';
 import type { VoiceReceiverManager } from '../voice';
+import { resolveAnyAudioInput } from '../audio/track-resolver';
+import { createConfiguredAudioSourceManager } from '../sources';
+import { probeAudioMetadata } from '../audio/ffmpeg';
 
 const logger = createLogger('discord');
 
@@ -58,6 +69,7 @@ export async function createDiscordBot(
     intents: [
       GatewayIntentBits.Guilds,
       GatewayIntentBits.GuildVoiceStates,
+      GatewayIntentBits.GuildMessages,
     ],
   });
 
@@ -65,6 +77,19 @@ export async function createDiscordBot(
     playbackManager && 'playbackManager' in playbackManager
       ? (playbackManager as AudioPlayerManager).playbackManager
       : (playbackManager as PlaybackManager | undefined);
+
+  // Hook playback events to auto-refresh any active Discord control panels
+  if (activeManager) {
+    activeManager.onStateChange((state) => {
+      refreshPanel(state.guildId, activeManager).catch(() => {});
+    });
+    activeManager.onQueueUpdate((event) => {
+      refreshPanel(event.guildId, activeManager).catch(() => {});
+    });
+    activeManager.onPlaybackSettingsUpdate((event: any) => {
+      refreshPanel(event.guildId, activeManager).catch(() => {});
+    });
+  }
 
   client.once('ready', async (readyClient) => {
     const inviteUrl = `https://discord.com/oauth2/authorize?client_id=${readyClient.user.id}&permissions=8&scope=bot%20applications.commands`;
@@ -93,16 +118,13 @@ export async function createDiscordBot(
       await readyClient.application.commands.set(slashCommandDefinitions);
       logger.info('Global slash commands registered successfully');
 
-      // Clean up any old guild-level duplicate commands so commands only show up once
+      // Register commands directly to each joined guild for INSTANT availability (bypasses global cache delay)
       for (const guild of readyClient.guilds.cache.values()) {
         try {
-          const existing = await guild.commands.fetch().catch(() => null);
-          if (existing && existing.size > 0) {
-            await guild.commands.set([]);
-            logger.debug({ guildId: guild.id }, 'Cleaned up duplicate guild-level slash commands');
-          }
-        } catch {
-          // Ignored if lacking command management permissions in this guild
+          await guild.commands.set(slashCommandDefinitions);
+          logger.info({ guildId: guild.id, name: guild.name }, 'Registered slash commands to guild immediately');
+        } catch (guildErr) {
+          logger.warn({ guildId: guild.id, err: guildErr }, 'Could not set guild slash commands directly');
         }
       }
     } catch (cmdErr) {
@@ -112,15 +134,11 @@ export async function createDiscordBot(
 
   client.on('guildCreate', async (guild) => {
     logger.info({ guildId: guild.id, name: guild.name, members: guild.memberCount }, 'Joined new Discord server!');
-    // Global commands are already available in all joined guilds.
-    // Clean up any local commands so Discord uses global commands without duplicates.
     try {
-      const existing = await guild.commands.fetch().catch(() => null);
-      if (existing && existing.size > 0) {
-        await guild.commands.set([]);
-      }
-    } catch {
-      // Ignored
+      await guild.commands.set(slashCommandDefinitions);
+      logger.info({ guildId: guild.id }, 'Registered slash commands to newly joined guild');
+    } catch (err) {
+      logger.warn({ guildId: guild.id, err }, 'Failed to register slash commands on guild join');
     }
   });
 
@@ -148,6 +166,87 @@ export async function createDiscordBot(
           recordingManager,
           voiceReceiver,
         );
+      } else if (interaction.isButton() && interaction.customId.startsWith('gakki:')) {
+        await handleControlPanelButton(interaction, activeManager);
+      } else if (interaction.isStringSelectMenu() && interaction.customId.startsWith('gakki:')) {
+        await handleControlPanelSelectMenu(interaction, activeManager);
+      } else if (interaction.isModalSubmit() && interaction.customId === 'gakki:play_modal') {
+        // Handle the play modal from the control panel
+        const input = await handleControlPanelModal(interaction);
+        if (input && interaction.guildId) {
+          await interaction.deferReply();
+
+          const guildId = interaction.guildId;
+          const guild = interaction.guild ?? (await interaction.client.guilds.fetch(guildId).catch(() => null));
+          let member = interaction.member as import('discord.js').GuildMember;
+          if ((!member || !member.voice) && guild) {
+            member = (await guild.members.fetch(interaction.user.id).catch(() => member)) as any;
+          }
+
+          const userVoiceChannel = member?.voice?.channel;
+
+          // Auto-join voice if not connected
+          const currentState = activeManager.getState(guildId);
+          if (currentState.voiceState !== 'CONNECTED') {
+            if (!userVoiceChannel) {
+              await interaction.editReply('You must be in a voice channel to play music.');
+              return;
+            }
+            try {
+              await activeManager.join(guildId, userVoiceChannel.id);
+            } catch (error) {
+              await interaction.editReply(`Failed to join voice channel: ${(error as Error).message}`);
+              return;
+            }
+          }
+
+          // Resolve the input and play it
+          try {
+            const srcManager = audioSourceManager || createConfiguredAudioSourceManager();
+            const resolved = await resolveAnyAudioInput(input, srcManager, trackManager);
+
+            let source;
+            if (resolved.path.startsWith('http://') || resolved.path.startsWith('https://')) {
+              const { HttpAudioSource } = await import('@gakki/core');
+              source = new HttpAudioSource(resolved.path, {
+                title: resolved.name,
+                artist: resolved.artist ?? null,
+                album: resolved.album ?? null,
+                duration: resolved.duration ?? null,
+              });
+            } else {
+              const { LocalAudioSource } = await import('@gakki/core');
+              source = new LocalAudioSource(resolved.path, undefined, probeAudioMetadata);
+            }
+
+            const playResult = await activeManager.play(guildId, source, {
+              name: resolved.name,
+              path: resolved.path,
+              duration: resolved.duration ?? undefined,
+              artist: resolved.artist,
+              album: resolved.album,
+              thumbnailUrl: resolved.thumbnailUrl,
+              sourceProvider: resolved.sourceProvider || 'Local Library',
+              sourceUrl: input,
+              addedBy: member?.displayName || interaction.user.username,
+              userId: interaction.user.id,
+            });
+
+            const durationStr = formatDuration(resolved.duration);
+            if (playResult.status === 'started') {
+              await interaction.editReply(
+                `▶️ Now playing: **${resolved.name}**${resolved.artist ? ` by **${resolved.artist}**` : ''} \`[${durationStr}]\``,
+              );
+            } else {
+              await interaction.editReply(
+                `➕ Added to queue at position **#${playResult.position}**: **${resolved.name}** \`[${durationStr}]\``,
+              );
+            }
+            await refreshPanel(guildId, activeManager).catch(() => {});
+          } catch (err: any) {
+            await interaction.editReply(`❌ Could not play: ${err.message}`);
+          }
+        }
       }
     } catch (err) {
       logger.error({ err }, '[ERROR] Unhandled error during interaction');
@@ -187,6 +286,24 @@ export async function createDiscordBot(
         }
       }
       activeManager.voiceLifecycleManager.handleHumanCountChange(guildId, humanCount);
+    }
+  });
+
+  // Listen for text triggers: bot mention (@Gakki), !panel, !gakki
+  client.on('messageCreate', async (message) => {
+    if (!activeManager || message.author.bot || !message.guildId) return;
+
+    const botId = client?.user?.id;
+    const isMentioned = botId && message.mentions.users.has(botId);
+    const content = message.content.trim().toLowerCase();
+    const isTriggerWord = content === '!panel' || content === '!gakki' || content === '!control' || content === '!player';
+
+    if (isMentioned || isTriggerWord) {
+      try {
+        await spawnControlPanelInChannel(message.channel, message.guildId, activeManager);
+      } catch (err) {
+        logger.error({ err, guildId: message.guildId }, 'Failed to spawn control panel on chat trigger');
+      }
     }
   });
 

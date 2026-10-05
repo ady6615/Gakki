@@ -17,7 +17,7 @@ async function testTracks() {
       const info = await play.soundcloud(url);
       console.log('  Name:', info.name);
       console.log('  Duration:', info.durationInSec);
-      const st = await play.stream_from_info(info);
+      const st = await play.stream_from_info(info as any);
       console.log('  SUCCESS! Stream type:', st.type, 'Stream is streamable!');
     } catch (err: any) {
       console.log('  FAILED:', err.message);

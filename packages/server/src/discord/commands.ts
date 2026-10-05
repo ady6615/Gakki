@@ -29,6 +29,7 @@ import {
   createLogger,
 } from '@gakki/core';
 import { probeAudioMetadata } from '../audio/ffmpeg';
+import { spawnControlPanel, refreshPanel } from './control-panel';
 import { listLocalAudioFiles, listLocalFolders } from '../audio/local-files';
 import * as path from 'node:path';
 import { enqueueFolder, enqueueMultipleFiles, isAudioFolder } from '../audio/batch-loader';
@@ -664,6 +665,10 @@ export const slashCommandDefinitions = [
           { name: '⚙️ Settings', value: 'settings' },
         ),
     ),
+
+  new SlashCommandBuilder()
+    .setName('panel')
+    .setDescription('Open the interactive control panel with buttons, volume, effects, and more'),
 ];
 
 /**
@@ -2578,6 +2583,11 @@ export async function handleChatInputCommand(
           await interaction.editReply(`❌ Failed to delete recording: ${err.message}`);
         }
       }
+      break;
+    }
+
+    case 'panel': {
+      await spawnControlPanel(interaction, playbackManager);
       break;
     }
 

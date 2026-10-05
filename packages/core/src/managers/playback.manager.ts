@@ -1007,6 +1007,10 @@ export class PlaybackManager {
     return this.adapter ? this.adapter.getPlaybackStatus(guildId) : 'IDLE';
   }
 
+  getPlaybackDuration(guildId: string): number {
+    return this.adapter?.getPlaybackDuration ? this.adapter.getPlaybackDuration(guildId) : 0;
+  }
+
   getState(guildId: string): VoicePlatformState {
     if (this.adapter) {
       return this.adapter.getState(guildId);
