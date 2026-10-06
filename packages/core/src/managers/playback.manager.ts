@@ -235,6 +235,78 @@ export class PlaybackManager {
     }
   }
 
+  private audioSourceResolver?: (
+    input: string,
+  ) => Promise<
+    | {
+        path: string;
+        name?: string;
+        duration?: number;
+        artist?: string;
+        album?: string;
+        thumbnailUrl?: string;
+      }
+    | AudioSource
+  >;
+
+  /**
+   * Set a dynamic audio source resolver for online / external stream resolution.
+   */
+  public setAudioSourceResolver(
+    resolver: (
+      input: string,
+    ) => Promise<
+      | {
+          path: string;
+          name?: string;
+          duration?: number;
+          artist?: string;
+          album?: string;
+          thumbnailUrl?: string;
+        }
+      | AudioSource
+    >,
+  ): void {
+    this.audioSourceResolver = resolver;
+  }
+
+  /**
+   * Asynchronously resolve dynamic stream URLs (Spotify, YouTube, Search) before creating an AudioSource.
+   */
+  public async createAudioSourceAsync(track: QueueTrack): Promise<AudioSource> {
+    const rawPath = track.path || track.sourceUrl || track.name;
+    const isExternalOrQuery =
+      rawPath.includes('open.spotify.com/') ||
+      rawPath.startsWith('spotify:') ||
+      rawPath.startsWith('ytsearch:') ||
+      rawPath.includes('youtube.com/watch') ||
+      rawPath.includes('youtu.be/') ||
+      rawPath.includes('music.youtube.com/') ||
+      rawPath.includes('soundcloud.com/');
+
+    if (this.audioSourceResolver && (isExternalOrQuery || !track.path.startsWith('http'))) {
+      try {
+        const resolved = await this.audioSourceResolver(rawPath);
+        if ('validate' in resolved) {
+          return resolved as AudioSource;
+        }
+        track.path = resolved.path;
+        if (resolved.name && !track.name) track.name = resolved.name;
+        if (resolved.duration && !track.duration) track.duration = resolved.duration;
+        if (resolved.artist && !track.artist) track.artist = resolved.artist;
+        if (resolved.album && !track.album) track.album = resolved.album;
+        if (resolved.thumbnailUrl && !track.thumbnailUrl) track.thumbnailUrl = resolved.thumbnailUrl;
+      } catch (err) {
+        this.logger.warn(
+          { err, path: track.path },
+          '[PLAYBACK] Dynamic source resolution failed, falling back to direct source',
+        );
+      }
+    }
+
+    return this.createAudioSource(track);
+  }
+
   /**
    * Create an AudioSource appropriate for the given track (local file or HTTP stream).
    */
@@ -413,7 +485,7 @@ export class PlaybackManager {
 
         if (prevStatus === 'PLAYING') {
           prevAdapter?.pause(guildId);
-          const source = this.createAudioSource(track);
+          const source = await this.createAudioSourceAsync(track);
           await this.adapter.play(guildId, source, {
             volume: this.getVolume(guildId),
             filters: this.getFilters(guildId),
@@ -583,7 +655,7 @@ export class PlaybackManager {
   private async replayCurrentTrack(guildId: string, track: QueueTrack): Promise<void> {
     try {
       const adapter = this.ensureAdapter();
-      const source = this.createAudioSource(track);
+      const source = await this.createAudioSourceAsync(track);
       await source.validate();
 
       this.endReasons.set(guildId, 'finished');
@@ -648,7 +720,7 @@ export class PlaybackManager {
       while (nextTrack && attempts < maxAttempts) {
         attempts++;
         try {
-          const source = this.createAudioSource(nextTrack);
+          const source = await this.createAudioSourceAsync(nextTrack);
           await source.validate();
 
           this.endReasons.set(guildId, 'finished');
@@ -731,7 +803,7 @@ export class PlaybackManager {
 
     // Play next track
     try {
-      const source = this.createAudioSource(nextTrack);
+      const source = await this.createAudioSourceAsync(nextTrack);
       await source.validate();
       this.endReasons.set(guildId, 'finished');
       this.currentTracks.set(guildId, nextTrack);

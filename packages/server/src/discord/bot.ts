@@ -80,6 +80,20 @@ export async function createDiscordBot(
 
   // Hook playback events to auto-refresh any active Discord control panels
   if (activeManager) {
+    if (audioSourceManager) {
+      activeManager.setAudioSourceResolver(async (input: string) => {
+        const resolved = await resolveAnyAudioInput(input, audioSourceManager, trackManager);
+        return {
+          path: resolved.path,
+          name: resolved.name,
+          duration: resolved.duration,
+          artist: resolved.artist,
+          album: resolved.album,
+          thumbnailUrl: resolved.thumbnailUrl,
+        };
+      });
+    }
+
     activeManager.onStateChange((state) => {
       refreshPanel(state.guildId, activeManager).catch(() => {});
     });

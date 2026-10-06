@@ -42,6 +42,7 @@ import { MeetVoiceAdapter } from './meet/meet-voice.adapter';
 import { MeetOAuthService } from './meet/meet-oauth.service';
 import { GeminiLiveVoiceProvider } from './voice/gemini-live-voice.provider';
 import { VoiceRateLimiter } from './security/voice-rate-limiter';
+import { resolveAnyAudioInput } from './audio/track-resolver';
 
 const logger = createLogger('main');
 
@@ -118,24 +119,27 @@ async function main(): Promise<void> {
     logger.info(`  ${name}: ${cap.available ? 'available' : 'unavailable'} (${cap.computeBackend})`);
   }
 
-  // Automatically trigger asynchronous background audio analysis and stem separation when new tracks enter library
+  // Automatically trigger asynchronous background audio analysis and stem separation when new local tracks enter library
   trackManager.onTrackSaved((savedTrack, source) => {
     if (source && source.sourceUrl) {
-      analysisClient.queueAnalysis({
-        trackId: savedTrack.id,
-        filePath: source.sourceUrl,
-      });
-
-      stemWorkerPool.enqueue(
-        {
+      const isLocalFile = source.sourceType === 'file' || !source.sourceUrl.startsWith('http');
+      if (isLocalFile) {
+        analysisClient.queueAnalysis({
           trackId: savedTrack.id,
           filePath: source.sourceUrl,
-          title: savedTrack.title,
-          duration: savedTrack.duration || 180,
-        },
-        { storageMode: 'persistent' },
-        'LOW',
-      );
+        });
+
+        stemWorkerPool.enqueue(
+          {
+            trackId: savedTrack.id,
+            filePath: source.sourceUrl,
+            title: savedTrack.title,
+            duration: savedTrack.duration || 180,
+          },
+          { storageMode: 'persistent' },
+          'LOW',
+        );
+      }
     }
   });
 
@@ -157,6 +161,19 @@ async function main(): Promise<void> {
     transitionFeatureManager,
     stemManager,
   );
+
+  // Wire dynamic stream resolver so queued Spotify/YouTube/search tracks resolve on-the-fly
+  playbackManager.setAudioSourceResolver(async (input: string) => {
+    const resolved = await resolveAnyAudioInput(input, audioSourceManager, trackManager);
+    return {
+      path: resolved.path,
+      name: resolved.name,
+      duration: resolved.duration,
+      artist: resolved.artist,
+      album: resolved.album,
+      thumbnailUrl: resolved.thumbnailUrl,
+    };
+  });
 
   // ── Phase 8: Transition Processor & Real-Time Pipe ──────────────
   const transitionProcessor = new TransitionProcessor();
