@@ -74,7 +74,7 @@ export function createRoutes(
   router.use('/playback', playbackRoutes(manager as any));
   router.use('/queue', queueRoutes(activePlaybackManager, audioSourceManager, trackManager));
   router.use('/artwork', artworkRoutes(artworkService));
-  router.use('/sources', sourceRoutes(audioSourceManager));
+  router.use('/sources', sourceRoutes(audioSourceManager, trackManager));
   router.use('/history', historyRoutes(analyticsManager));
   router.use(
     '/playlists',

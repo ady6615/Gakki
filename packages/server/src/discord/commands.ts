@@ -41,6 +41,9 @@ import { StemWorkerPool } from '../audio/stems/stem-worker-pool';
 import { StemProviderRegistry } from '../audio/stems/stem-provider.registry';
 import { checkCommandPermission, checkRecordingPermission, CommandPermissionLevel } from './permissions';
 import { BotErrors, formatUserFacingError } from './errors';
+import { SpotifyParser } from '../audio/spotify-parser';
+import { DownloaderService } from '../audio/downloader.service';
+import { YouTubeSourceProvider } from '../sources/youtube.provider';
 import type { VoiceReceiverManager } from '../voice/voice-receiver';
 
 const logger = createLogger('discord-commands');
@@ -110,6 +113,16 @@ export const slashCommandDefinitions = [
         .setRequired(false)
         .setMinValue(1)
         .setMaxValue(25),
+    ),
+
+  new SlashCommandBuilder()
+    .setName('download')
+    .setDescription('Download music from Spotify, YouTube, or search terms into your offline library')
+    .addStringOption((option) =>
+      option
+        .setName('input')
+        .setDescription('Spotify track/album/playlist URL, YouTube URL, or search keywords')
+        .setRequired(true),
     ),
 
   new SlashCommandBuilder()
@@ -760,7 +773,7 @@ export async function handleChatInputCommand(
     return;
   }
 
-  const guild = interaction.guild ?? (await interaction.client.guilds.fetch(guildId).catch(() => null));
+  const guild = interaction.guild ?? (await interaction.client?.guilds?.fetch(guildId).catch(() => null));
 
   let member = interaction.member as GuildMember;
   if ((!member || !member.voice) && guild) {
@@ -931,6 +944,85 @@ export async function handleChatInputCommand(
         input = available[0];
       }
 
+      // Handle Spotify Playlist or Album in /play
+      const spotifyParsed = SpotifyParser.parseIdentifier(input);
+      if (spotifyParsed && (spotifyParsed.type === 'playlist' || spotifyParsed.type === 'album')) {
+        try {
+          const collection = await SpotifyParser.getCollection(input);
+          if (collection.tracks.length === 0) {
+            await interaction.editReply(`Spotify ${collection.type} "${collection.title}" has no tracks.`);
+            return;
+          }
+
+          const userTag = member?.displayName || interaction.user.username;
+          const first = collection.tracks[0];
+          const srcManager = audioSourceManager || createConfiguredAudioSourceManager();
+          const firstResolved = await srcManager.resolve(first.spotifyUrl || `${first.artist} - ${first.title}`);
+
+          let firstSource: AudioSource;
+          if (
+            firstResolved.isStream ||
+            firstResolved.source.sourceType === 'stream' ||
+            firstResolved.streamUrlOrPath.startsWith('http://') ||
+            firstResolved.streamUrlOrPath.startsWith('https://')
+          ) {
+            firstSource = new HttpAudioSource(firstResolved.streamUrlOrPath, firstResolved.metadata);
+          } else {
+            firstSource = new LocalAudioSource(firstResolved.streamUrlOrPath, undefined, probeAudioMetadata);
+          }
+
+          await playbackManager.play(guildId, firstSource, {
+            name: firstResolved.title,
+            path: firstResolved.streamUrlOrPath,
+            duration: firstResolved.metadata.duration ?? undefined,
+            artist: firstResolved.metadata.artist ?? undefined,
+            album: firstResolved.metadata.album ?? undefined,
+            thumbnailUrl: firstResolved.metadata.thumbnailUrl ?? collection.thumbnailUrl,
+            sourceProvider: 'Spotify',
+            sourceUrl: first.spotifyUrl,
+            addedBy: userTag,
+            userId: member?.user?.id || member?.id,
+          });
+
+          // Enqueue the rest of the collection
+          for (let i = 1; i < collection.tracks.length; i++) {
+            const t = collection.tracks[i];
+            playbackManager.queueManager.enqueue(guildId, {
+              name: `${t.artist} - ${t.title}`,
+              path: t.spotifyUrl || `ytsearch:${t.artist} - ${t.title}`,
+              duration: t.durationSec,
+              artist: t.artist,
+              album: t.album || collection.title,
+              thumbnailUrl: t.thumbnailUrl || collection.thumbnailUrl,
+              sourceProvider: 'Spotify',
+              sourceUrl: t.spotifyUrl,
+              addedBy: userTag,
+              userId: member?.user?.id || member?.id,
+            });
+          }
+
+          const embed = new EmbedBuilder()
+            .setTitle(`🟢 Queued Spotify ${collection.type === 'album' ? 'Album' : 'Playlist'}: ${collection.title}`)
+            .setDescription(
+              `Loaded **${collection.tracks.length}** tracks into queue.\n` +
+              `▶️ **Now Playing:** **${firstResolved.title}**${firstResolved.metadata.artist ? ` by *${firstResolved.metadata.artist}*` : ''}`,
+            )
+            .setColor(0x1db954)
+            .setFooter({ text: `Requested by ${userTag}` });
+
+          if (collection.thumbnailUrl) {
+            embed.setThumbnail(collection.thumbnailUrl);
+          }
+
+          await interaction.editReply({ embeds: [embed] });
+          return;
+        } catch (colErr: any) {
+          logger.warn({ colErr, input }, '[AUDIO] Failed to enqueue Spotify collection');
+          await interaction.editReply(`Failed to load Spotify collection: ${colErr.message}`);
+          return;
+        }
+      }
+
       const srcManager = audioSourceManager || createConfiguredAudioSourceManager();
 
       let source: AudioSource;
@@ -1058,6 +1150,59 @@ export async function handleChatInputCommand(
       } catch (error) {
         logger.error({ err: error, guildId }, '[ERROR] Playback failed');
         await interaction.editReply(`Playback failed: ${(error as Error).message}`);
+      }
+      break;
+    }
+
+    case 'download': {
+      await interaction.deferReply();
+      const input = interaction.options.getString('input', true).trim();
+      const srcManager = audioSourceManager || createConfiguredAudioSourceManager();
+      const youtubeProvider = (srcManager as any).providers?.get('youtube') || new YouTubeSourceProvider();
+      const downloader = new DownloaderService(youtubeProvider, trackManager);
+
+      try {
+        const parsed = SpotifyParser.parseIdentifier(input);
+        if (parsed && (parsed.type === 'playlist' || parsed.type === 'album')) {
+          await interaction.editReply(`📥 Starting background batch download of Spotify ${parsed.type}...`);
+          let completed = 0;
+          let totalCount = 0;
+
+          const results = await downloader.downloadCollection(input, (prog) => {
+            totalCount = prog.total || totalCount;
+            if (prog.status === 'completed') completed++;
+            interaction.editReply(`📥 Downloading Spotify ${parsed.type}: **${completed}/${totalCount}** tracks (${prog.title})`).catch(() => {});
+          });
+
+          const embed = new EmbedBuilder()
+            .setTitle(`✅ Spotify ${parsed.type === 'album' ? 'Album' : 'Playlist'} Download Complete`)
+            .setDescription(`Successfully downloaded **${results.length}** track(s) directly to your local library.`)
+            .setColor(0x57f287);
+          await interaction.editReply({ content: '', embeds: [embed] });
+        } else {
+          await interaction.editReply('🔍 Searching & downloading track audio...');
+          const result = await downloader.downloadTrack(input, (prog) => {
+            if (prog.status === 'downloading') {
+              interaction.editReply(`⬇️ Downloading audio & embedding ID3 metadata: **${prog.title}**...`).catch(() => {});
+            }
+          });
+
+          const embed = new EmbedBuilder()
+            .setTitle('✅ Track Downloaded Successfully')
+            .setDescription(
+              `🎵 **Title:** ${result.title}\n` +
+              `🎤 **Artist:** ${result.artist || 'Unknown'}\n` +
+              `📁 **File Path:** \`${result.relativePath}\`\n` +
+              (result.duration ? `⏱️ **Duration:** ${formatDuration(result.duration)}\n` : '') +
+              `✨ *Saved directly to offline library & indexed in database.*`
+            )
+            .setColor(0x57f287);
+
+          await interaction.editReply({ content: '', embeds: [embed] });
+        }
+      } catch (err: any) {
+        logger.error({ err, input }, '[DISCORD] Download command failed');
+        await interaction.editReply(`❌ Download failed: ${err.message}`);
       }
       break;
     }

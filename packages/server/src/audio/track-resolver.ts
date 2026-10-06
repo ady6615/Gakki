@@ -109,14 +109,22 @@ export async function resolveAnyAudioInput(
           }
         }
 
-        throw new Error(
-          `Spotify track "${spotifyTitle}" identified, but no local audio file was found in your library. Please upload or add "${spotifyTitle}.mp3" to your storage/music folder to play it.`
-        );
+        // Check if audioSourceManager can resolve it directly via live streaming
+        if (audioSourceManager && audioSourceManager.canHandle(input)) {
+          const resolved = await audioSourceManager.resolve(input);
+          return {
+            name: resolved.title,
+            path: resolved.streamUrlOrPath,
+            duration: resolved.metadata.duration ?? undefined,
+            artist: resolved.metadata.artist ?? undefined,
+            album: resolved.metadata.album ?? undefined,
+            thumbnailUrl: resolved.metadata.thumbnailUrl ?? spotifyThumb,
+            sourceProvider: 'spotify',
+            sourceUrl: `https://open.spotify.com/track/${trackId}`,
+          };
+        }
       }
     } catch (err: any) {
-      if (err.message && err.message.includes('identified, but no local audio file')) {
-        throw err;
-      }
       logger.warn({ err, trackId }, '[RESOLVER] Spotify oEmbed query failed');
     }
   }
@@ -273,9 +281,32 @@ export async function resolveAnyAudioInput(
     };
   }
 
-  // ── 7. Not Found ────────────────────────────────────────────────
+  // ── 7. Online Search Fallback (YouTube / YouTube Music) ────────
+  if (audioSourceManager) {
+    try {
+      const searchResults = await audioSourceManager.search(input, { limit: 1 });
+      if (searchResults.length > 0) {
+        const topResult = searchResults[0];
+        const resolved = await audioSourceManager.resolve(topResult.sourceUrl);
+        return {
+          name: resolved.title,
+          path: resolved.streamUrlOrPath,
+          duration: resolved.metadata.duration ?? undefined,
+          artist: resolved.metadata.artist ?? undefined,
+          album: resolved.metadata.album ?? undefined,
+          thumbnailUrl: resolved.metadata.thumbnailUrl ?? resolved.metadata.coverArtPath ?? undefined,
+          sourceProvider: resolved.source.provider,
+          sourceUrl: topResult.sourceUrl,
+        };
+      }
+    } catch (searchErr) {
+      logger.debug({ searchErr, input }, '[RESOLVER] Online search fallback failed');
+    }
+  }
+
+  // ── 8. Not Found ────────────────────────────────────────────────
   throw new Error(
-    `File not found: "${input}". Please provide a valid local audio file path, direct audio link (e.g. SoundCloud, HTTP stream), or upload an audio file.`
+    `Audio source not found for: "${input}". Please provide a valid track name, Spotify/YouTube link, SoundCloud link, or local audio file.`
   );
 }
 
