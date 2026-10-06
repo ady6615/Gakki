@@ -7,7 +7,7 @@ import {
   type TrackManager,
 } from '@gakki/core';
 import { SpotifyParser, type SpotifyTrackMeta, type SpotifyCollectionMeta } from './spotify-parser';
-import { YouTubeSourceProvider } from '../sources/youtube.provider';
+import { YouTubeSourceProvider, getYtDlpFlags } from '../sources/youtube.provider';
 import { probeAudioMetadata } from './ffmpeg';
 
 const logger = createLogger('downloader-service');
@@ -145,16 +145,17 @@ export class DownloaderService {
     onProgress?.({ title: `${artist} - ${title}`, artist, status: 'downloading' });
 
     try {
-      await youtubedl(targetYtUrl, {
-        extractAudio: true,
-        audioFormat: 'mp3',
-        audioQuality: 0, // Best VBR quality
-        embedThumbnail: true,
-        addMetadata: true,
-        output: outputTemplate,
-        noCheckCertificates: true,
-        noWarnings: true,
-      });
+      await youtubedl(
+        targetYtUrl,
+        getYtDlpFlags({
+          extractAudio: true,
+          audioFormat: 'mp3',
+          audioQuality: 0, // Best VBR quality
+          embedThumbnail: true,
+          addMetadata: true,
+          output: outputTemplate,
+        }),
+      );
 
       onProgress?.({ title: `${artist} - ${title}`, artist, status: 'indexing' });
 

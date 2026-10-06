@@ -1,3 +1,5 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import type {
   MusicSourceProvider,
   MusicSearchProvider,
@@ -9,6 +11,7 @@ import type {
 import { createLogger } from '@gakki/core';
 import youtubedl from 'youtube-dl-exec';
 import play from 'play-dl';
+import ffmpegPath from 'ffmpeg-static';
 import { ArtworkService } from '../services/artwork.service';
 
 const logger = createLogger('youtube-provider');
@@ -18,6 +21,39 @@ export class ProviderPolicyRestrictionError extends Error {
     super(`[POLICY] Provider "${provider}" restriction: ${policyNotice}`);
     this.name = 'ProviderPolicyRestrictionError';
   }
+}
+
+/**
+ * Builds optimized yt-dlp arguments with mobile/embedded client rotation
+ * to reliably bypass YouTube's "Sign in to confirm you're not a bot" challenge.
+ */
+export function getYtDlpFlags(extra: Record<string, any> = {}): Record<string, any> {
+  const flags: Record<string, any> = {
+    noCheckCertificates: true,
+    noWarnings: true,
+    preferFreeFormats: true,
+    extractorArgs: 'youtube:player_client=android,web,tv_embedded',
+    addHeader: [
+      'referer:youtube.com',
+      'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    ],
+    ...extra,
+  };
+
+  if (ffmpegPath && fs.existsSync(ffmpegPath)) {
+    flags.ffmpegLocation = ffmpegPath;
+  }
+
+  // Support custom cookies file or browser cookies if configured
+  if (process.env.YOUTUBE_COOKIES_PATH && fs.existsSync(process.env.YOUTUBE_COOKIES_PATH)) {
+    flags.cookies = process.env.YOUTUBE_COOKIES_PATH;
+  } else if (fs.existsSync(path.resolve(process.cwd(), 'cookies.txt'))) {
+    flags.cookies = path.resolve(process.cwd(), 'cookies.txt');
+  } else if (process.env.YOUTUBE_COOKIES_FROM_BROWSER) {
+    flags.cookiesFromBrowser = process.env.YOUTUBE_COOKIES_FROM_BROWSER;
+  }
+
+  return flags;
 }
 
 export class YouTubeSourceProvider implements MusicSourceProvider, MusicSearchProvider {
@@ -78,13 +114,10 @@ export class YouTubeSourceProvider implements MusicSourceProvider, MusicSearchPr
     }
 
     try {
-      const output = (await youtubedl(videoUrl, {
-        dumpSingleJson: true,
-        noCheckCertificates: true,
-        noWarnings: true,
-        preferFreeFormats: true,
-        addHeader: ['referer:youtube.com', 'user-agent:googlebot'],
-      })) as any;
+      const output = (await youtubedl(
+        videoUrl,
+        getYtDlpFlags({ dumpSingleJson: true }),
+      )) as any;
 
       let coverArtPath: string | null = null;
       const thumb = output.thumbnail;
@@ -125,28 +158,28 @@ export class YouTubeSourceProvider implements MusicSourceProvider, MusicSearchPr
 
     logger.info({ videoUrl }, '[YOUTUBE] Resolving direct audio stream');
 
-    const output = (await youtubedl(videoUrl, {
-      dumpSingleJson: true,
-      noCheckCertificates: true,
-      noWarnings: true,
-      preferFreeFormats: true,
-      addHeader: ['referer:youtube.com', 'user-agent:googlebot'],
-    })) as any;
+    const output = (await youtubedl(
+      videoUrl,
+      getYtDlpFlags({ dumpSingleJson: true }),
+    )) as any;
 
     if (!output) {
       throw new Error(`Could not extract video info for: ${videoUrl}`);
     }
 
-    // Find best audio format (e.g. format 251 Opus or 140 M4A)
+    // Prioritize pure audio-only formats (e.g. format 251 Opus or 140 M4A), then combined audio streams
     const formats: any[] = output.formats || [];
-    const audioFormats = formats.filter(
+    const pureAudioFormats = formats.filter(
       (f) => f.vcodec === 'none' && f.acodec !== 'none' && f.url,
     );
+    pureAudioFormats.sort((a, b) => (b.abr || b.tbr || 0) - (a.abr || a.tbr || 0));
 
-    // Sort by bitrate descending
-    audioFormats.sort((a, b) => (b.abr || b.tbr || 0) - (a.abr || a.tbr || 0));
+    const anyAudioFormats = formats.filter((f) => f.acodec && f.acodec !== 'none' && f.url);
+    anyAudioFormats.sort((a, b) => (b.abr || b.tbr || 0) - (a.abr || a.tbr || 0));
 
-    const selectedFormat = audioFormats[0] || formats.find((f) => f.url);
+    const selectedFormat =
+      pureAudioFormats[0] || anyAudioFormats[0] || formats.find((f) => f.url);
+
     if (!selectedFormat || !selectedFormat.url) {
       throw new Error(`No playable audio format found for: ${videoUrl}`);
     }
