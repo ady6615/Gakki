@@ -859,4 +859,129 @@ export class PlaylistManager {
     newPlaylist.trackCount = original.tracks.length;
     return newPlaylist;
   }
+
+  /**
+   * Save or update an external playlist (e.g., imported from Spotify or YouTube)
+   * with all its tracks, metadata, and genres persisted in PostgreSQL.
+   */
+  async saveExternalPlaylist(input: {
+    name: string;
+    description?: string;
+    guildId?: string;
+    ownerUserId?: string;
+    tracks: Array<{
+      title: string;
+      artist?: string;
+      album?: string;
+      duration?: number;
+      sourceUrl?: string;
+      provider?: string;
+      genre?: string;
+      thumbnailUrl?: string;
+    }>;
+  }): Promise<Playlist> {
+    const name = input.name.trim();
+    if (!name) {
+      throw new Error('Playlist name cannot be empty');
+    }
+
+    // Find if playlist already exists for this guild/user
+    let playlist = await this.findPlaylistByName(name, {
+      guildId: input.guildId,
+      userId: input.ownerUserId,
+    });
+
+    if (!playlist) {
+      playlist = await this.createPlaylist({
+        name,
+        description: input.description ?? 'Imported playlist',
+        guildId: input.guildId,
+        ownerUserId: input.ownerUserId,
+        visibility: input.guildId ? 'guild' : 'public',
+      });
+    }
+
+    // Clear existing tracks if updating
+    if (!this.db) {
+      this.inMemoryTracks.set(playlist.id, []);
+    } else {
+      await this.db.delete(schema.playlistTracks).where(eq(schema.playlistTracks.playlistId, playlist.id));
+    }
+
+    // Persist each track and add to playlist
+    for (const t of input.tracks) {
+      let trackId: string | null = null;
+      if (this.trackManager) {
+        const saved = await this.trackManager.saveTrackWithSource(
+          {
+            title: t.title,
+            artist: t.artist ?? null,
+            album: t.album ?? null,
+            duration: t.duration ?? null,
+            thumbnailUrl: t.thumbnailUrl ?? null,
+            genre: t.genre ?? null,
+          },
+          {
+            provider: t.provider || 'spotify',
+            sourceType: 'stream',
+            sourceUrl: t.sourceUrl || '',
+          },
+        );
+        trackId = saved.track.id;
+      }
+
+      if (trackId) {
+        await this.addTrackToPlaylist(playlist.id, trackId, input.ownerUserId);
+      }
+    }
+
+    playlist.trackCount = input.tracks.length;
+    return playlist;
+  }
+
+  /**
+   * Automatically generate or sync the dynamic "🔥 Most Played" playlist for a guild
+   * based on historical playback analytics.
+   */
+  async syncMostPlayedPlaylist(
+    guildId: string,
+    analyticsManager?: any,
+    limit: number = 25,
+  ): Promise<Playlist> {
+    const playlistName = '🔥 Most Played';
+    let playlist = await this.findPlaylistByName(playlistName, { guildId });
+
+    if (!playlist) {
+      playlist = await this.createPlaylist({
+        name: playlistName,
+        description: 'Auto-generated playlist of the most played songs in this server',
+        guildId,
+        visibility: 'guild',
+      });
+    }
+
+    // Clear old tracks in the most played playlist
+    if (!this.db) {
+      this.inMemoryTracks.set(playlist.id, []);
+    } else {
+      await this.db.delete(schema.playlistTracks).where(eq(schema.playlistTracks.playlistId, playlist.id));
+    }
+
+    // Fetch top tracks from analytics if available
+    let topTracks: Array<{ trackId: string }> = [];
+    if (analyticsManager) {
+      const stats = await analyticsManager.getDashboardStats({ guildId, timeRange: 'all' });
+      topTracks = (stats.topTracks || stats.mostPlayedTracks || []).slice(0, limit);
+    }
+
+    for (const t of topTracks) {
+      if (t.trackId) {
+        await this.addTrackToPlaylist(playlist.id, t.trackId);
+      }
+    }
+
+    playlist.trackCount = topTracks.length;
+    return playlist;
+  }
 }
+

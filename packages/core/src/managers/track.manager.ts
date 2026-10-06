@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { eq, and, ilike, or } from 'drizzle-orm';
+import { eq, and, ilike, or, desc, sql } from 'drizzle-orm';
 import type { DatabaseClient } from '../database/connection';
 import * as schema from '../database/schema';
 import type { TrackMetadata, TrackSourceInfo } from '../types/source';
 import { createLogger } from '../utils/logger';
+import { inferGenre } from '../utils/genre';
 
 const logger = createLogger('track-manager');
 
@@ -65,11 +66,19 @@ export class TrackManager {
 
   /**
    * Save or find an existing track and associate it with a track source.
+   * Ensures genre, link, and rich metadata are saved.
    */
   async saveTrackWithSource(
     metadata: TrackMetadata,
     source: TrackSourceInfo,
   ): Promise<{ track: TrackRow; source: TrackSourceRow }> {
+    const genre = metadata.genre || inferGenre({
+      title: metadata.title,
+      artist: metadata.artist,
+      album: metadata.album,
+      genre: metadata.genre,
+    });
+
     if (!this.db) {
       // In-memory mock row when running without database
       const trackId = randomUUID();
@@ -80,7 +89,7 @@ export class TrackManager {
         album: metadata.album ?? null,
         albumArtist: metadata.albumArtist ?? null,
         duration: metadata.duration ?? null,
-        genre: metadata.genre ?? null,
+        genre: genre ?? 'Pop',
         year: metadata.year ?? null,
         trackNumber: metadata.trackNumber ?? null,
         coverArt: metadata.coverArtPath ?? metadata.thumbnailUrl ?? null,
@@ -153,7 +162,16 @@ export class TrackManager {
           .limit(1);
 
         if (trackRows.length > 0) {
-          return { track: trackRows[0], source: existingSource };
+          const existingTrack = trackRows[0];
+          // If genre was missing or updated, update track row
+          if (!existingTrack.genre && genre) {
+            await this.db
+              .update(schema.tracks)
+              .set({ genre, updatedAt: new Date() })
+              .where(eq(schema.tracks.id, existingTrack.id));
+            existingTrack.genre = genre;
+          }
+          return { track: existingTrack, source: existingSource };
         }
       }
 
@@ -166,7 +184,7 @@ export class TrackManager {
           album: metadata.album ?? null,
           albumArtist: metadata.albumArtist ?? null,
           duration: metadata.duration ?? null,
-          genre: metadata.genre ?? null,
+          genre: genre ?? 'Pop',
           year: metadata.year ?? null,
           trackNumber: metadata.trackNumber ?? null,
           coverArt: metadata.coverArtPath ?? metadata.thumbnailUrl ?? null,
@@ -192,8 +210,8 @@ export class TrackManager {
       const newSource = insertedSources[0];
 
       logger.info(
-        { trackId: newTrack.id, title: newTrack.title, provider: source.provider },
-        '[DB] Track and source persisted',
+        { trackId: newTrack.id, title: newTrack.title, provider: source.provider, genre: newTrack.genre },
+        '[DB] Track and source persisted with genre',
       );
 
       this.emitTrackSaved(newTrack, newSource);
@@ -243,6 +261,128 @@ export class TrackManager {
         .limit(limit);
     } catch (err) {
       logger.error({ err, query }, 'Database track search failed');
+      return [];
+    }
+  }
+
+  /**
+   * Fetch tracks by musical genre.
+   */
+  async getTracksByGenre(
+    genre: string,
+    limit: number = 20,
+  ): Promise<Array<TrackRow & { source?: TrackSourceRow | null }>> {
+    const cleanGenre = genre.trim();
+    if (!cleanGenre) return [];
+
+    if (!this.db) {
+      const matched = Array.from(this.inMemoryTracks.values())
+        .filter((t) => t.genre?.toLowerCase().includes(cleanGenre.toLowerCase()))
+        .slice(0, limit);
+
+      return matched.map((t) => ({
+        ...t,
+        source: TrackManager.getSharedSourceByTrackId(t.id),
+      }));
+    }
+
+    try {
+      const pattern = `%${cleanGenre}%`;
+      const rows = await this.db
+        .select({
+          track: schema.tracks,
+          source: schema.trackSources,
+        })
+        .from(schema.tracks)
+        .leftJoin(schema.trackSources, eq(schema.tracks.id, schema.trackSources.trackId))
+        .where(ilike(schema.tracks.genre, pattern))
+        .limit(limit);
+
+      // Deduplicate tracks
+      const seen = new Set<string>();
+      const result: Array<TrackRow & { source?: TrackSourceRow | null }> = [];
+      for (const { track, source } of rows) {
+        if (!seen.has(track.id)) {
+          seen.add(track.id);
+          result.push({ ...track, source });
+        }
+      }
+      return result;
+    } catch (err) {
+      logger.error({ err, genre: cleanGenre }, 'Database getTracksByGenre failed');
+      return [];
+    }
+  }
+
+  /**
+   * Get all distinct genres recorded in the database.
+   */
+  async getDistinctGenres(): Promise<Array<{ genre: string; count: number }>> {
+    if (!this.db) {
+      const counts = new Map<string, number>();
+      for (const t of this.inMemoryTracks.values()) {
+        const g = t.genre || 'Pop';
+        counts.set(g, (counts.get(g) || 0) + 1);
+      }
+      return Array.from(counts.entries()).map(([genre, count]) => ({ genre, count }));
+    }
+
+    try {
+      const rows = await this.db
+        .select({
+          genre: schema.tracks.genre,
+          count: sql<number>`count(*)::int`,
+        })
+        .from(schema.tracks)
+        .where(sql`${schema.tracks.genre} IS NOT NULL`)
+        .groupBy(schema.tracks.genre)
+        .orderBy(desc(sql`count(*)`));
+
+      return rows.map((r) => ({ genre: r.genre || 'Pop', count: r.count }));
+    } catch (err) {
+      logger.error({ err }, 'Database getDistinctGenres failed');
+      return [];
+    }
+  }
+
+  /**
+   * Get recent tracks stored in library.
+   */
+  async getRecentTracks(
+    limit: number = 20,
+  ): Promise<Array<TrackRow & { source?: TrackSourceRow | null }>> {
+    if (!this.db) {
+      const tracks = Array.from(this.inMemoryTracks.values())
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+        .slice(0, limit);
+      return tracks.map((t) => ({
+        ...t,
+        source: TrackManager.getSharedSourceByTrackId(t.id),
+      }));
+    }
+
+    try {
+      const rows = await this.db
+        .select({
+          track: schema.tracks,
+          source: schema.trackSources,
+        })
+        .from(schema.tracks)
+        .leftJoin(schema.trackSources, eq(schema.tracks.id, schema.trackSources.trackId))
+        .orderBy(desc(schema.tracks.createdAt))
+        .limit(limit);
+
+      const seen = new Set<string>();
+      const result: Array<TrackRow & { source?: TrackSourceRow | null }> = [];
+      for (const { track, source } of rows) {
+        if (!seen.has(track.id)) {
+          seen.add(track.id);
+          result.push({ ...track, source });
+        }
+      }
+      return result;
+    } catch (err) {
+      logger.error({ err }, 'Database getRecentTracks failed');
       return [];
     }
   }

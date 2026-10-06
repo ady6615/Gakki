@@ -25,6 +25,7 @@ import {
   spawnControlPanelInChannel,
   refreshPanel,
 } from './control-panel';
+import { handleQuickPlayInteraction } from './quickplay-menu';
 import type { VoiceReceiverManager } from '../voice';
 import { resolveAnyAudioInput } from '../audio/track-resolver';
 import { createConfiguredAudioSourceManager } from '../sources';
@@ -180,6 +181,18 @@ export async function createDiscordBot(
           recordingManager,
           voiceReceiver,
         );
+      } else if (
+        (interaction.isButton() || interaction.isStringSelectMenu()) &&
+        interaction.customId.startsWith('gakki:qp:')
+      ) {
+        await handleQuickPlayInteraction(interaction as any, {
+          playbackManager: activeManager,
+          audioSourceManager,
+          analyticsManager,
+          playlistManager,
+          trackManager,
+          recManager,
+        });
       } else if (interaction.isButton() && interaction.customId.startsWith('gakki:')) {
         await handleControlPanelButton(interaction, activeManager);
       } else if (interaction.isStringSelectMenu() && interaction.customId.startsWith('gakki:')) {

@@ -21,6 +21,7 @@ export { schema } from './database';
 export { createLogger } from './utils/logger';
 export { loadConfig } from './utils/config';
 export type { AppConfig } from './utils/config';
+export { inferGenre } from './utils/genre';
 
 // Audio
 export * from './audio';

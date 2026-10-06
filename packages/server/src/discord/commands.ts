@@ -45,6 +45,7 @@ import { SpotifyParser } from '../audio/spotify-parser';
 import { DownloaderService } from '../audio/downloader.service';
 import { YouTubeSourceProvider } from '../sources/youtube.provider';
 import type { VoiceReceiverManager } from '../voice/voice-receiver';
+import { buildQuickPlayMenu } from './quickplay-menu';
 
 const logger = createLogger('discord-commands');
 
@@ -66,7 +67,11 @@ export const slashCommandDefinitions = [
 
   new SlashCommandBuilder()
     .setName('join')
-    .setDescription('Join your current voice channel'),
+    .setDescription('Join your current voice channel and show QuickPlay menu'),
+
+  new SlashCommandBuilder()
+    .setName('menu')
+    .setDescription('Open the interactive QuickPlay music menu (previous playlists, songs, genres, most played)'),
 
   new SlashCommandBuilder()
     .setName('play')
@@ -164,6 +169,9 @@ export const slashCommandDefinitions = [
     )
     .addSubcommand((sub) =>
       sub.setName('list').setDescription('List available playlists for you and this server'),
+    )
+    .addSubcommand((sub) =>
+      sub.setName('mostplayed').setDescription('Generate and play the server\'s most played songs'),
     )
     .addSubcommand((sub) =>
       sub
@@ -838,7 +846,17 @@ export async function handleChatInputCommand(
       await interaction.deferReply();
       try {
         await playbackManager.join(guildId, userVoiceChannel.id);
-        await interaction.editReply(`Joined voice channel **${userVoiceChannel.name}**.`);
+        const { embeds, components } = await buildQuickPlayMenu(guildId, {
+          analyticsManager,
+          playlistManager,
+          trackManager,
+          recManager,
+        });
+        await interaction.editReply({
+          content: `✅ Joined voice channel **${userVoiceChannel.name}**! Here are your quick playback options:`,
+          embeds,
+          components,
+        });
       } catch (error) {
         logger.error({ err: error, guildId }, '[ERROR] Failed to join voice channel');
         if (error instanceof VoicePermissionError) {
@@ -846,6 +864,22 @@ export async function handleChatInputCommand(
         } else {
           await interaction.editReply(`Failed to join voice channel: ${(error as Error).message}`);
         }
+      }
+      break;
+    }
+
+    case 'menu': {
+      await interaction.deferReply();
+      try {
+        const { embeds, components } = await buildQuickPlayMenu(guildId, {
+          analyticsManager,
+          playlistManager,
+          trackManager,
+          recManager,
+        });
+        await interaction.editReply({ embeds, components });
+      } catch (err: any) {
+        await interaction.editReply(`Failed to open QuickPlay menu: ${err.message}`);
       }
       break;
     }
@@ -999,6 +1033,31 @@ export async function handleChatInputCommand(
               addedBy: userTag,
               userId: member?.user?.id || member?.id,
             });
+          }
+
+          // Persist imported playlist and tracks in PostgreSQL if managers available
+          if (playlistManager && trackManager) {
+            try {
+              const collectionName = collection.title || `Spotify ${collection.type}`;
+              await playlistManager.saveExternalPlaylist({
+                name: collectionName,
+                description: `Imported Spotify ${collection.type} (${collection.tracks.length} tracks)`,
+                guildId,
+                ownerUserId: member?.user?.id || member?.id,
+                tracks: collection.tracks.map((t) => ({
+                  title: t.title,
+                  artist: t.artist,
+                  album: t.album || collection.title,
+                  duration: t.durationSec,
+                  sourceUrl: t.spotifyUrl,
+                  provider: 'spotify',
+                  thumbnailUrl: t.thumbnailUrl || collection.thumbnailUrl,
+                })),
+              });
+              logger.info({ collectionName, tracksCount: collection.tracks.length }, '[DB] Persisted imported Spotify playlist to database');
+            } catch (dbErr) {
+              logger.warn({ dbErr }, '[DB] Could not save external playlist');
+            }
           }
 
           const embed = new EmbedBuilder()
@@ -1967,6 +2026,101 @@ export async function handleChatInputCommand(
           } catch (err: any) {
             await interaction.reply({ content: `Failed to duplicate playlist: ${err.message}`, ephemeral: true });
           }
+          break;
+        }
+
+        case 'mostplayed': {
+          await interaction.deferReply();
+          if (!analyticsManager) {
+            await interaction.editReply('Analytics service is required for most played playlist.');
+            return;
+          }
+
+          if (!userVoiceChannel) {
+            await interaction.editReply('You must be in a voice channel to play a playlist.');
+            return;
+          }
+
+          const currentState = playbackManager.getState(guildId);
+          if (currentState.voiceState !== 'CONNECTED') {
+            try {
+              await playbackManager.join(guildId, userVoiceChannel.id);
+            } catch (err: any) {
+              await interaction.editReply(`Failed to join voice channel: ${err.message}`);
+              return;
+            }
+          }
+
+          const mostPlayed = await playlistManager.syncMostPlayedPlaylist(guildId, analyticsManager, 25);
+          const details = await playlistManager.getPlaylist(mostPlayed.id);
+
+          if (!details || details.tracks.length === 0) {
+            await interaction.editReply('No playback history found yet to generate a Most Played playlist.');
+            return;
+          }
+
+          const tracks = details.tracks.filter((t) => !!t.track);
+          if (tracks.length === 0) {
+            await interaction.editReply('No valid tracks found in the Most Played playlist.');
+            return;
+          }
+
+          const first = tracks[0];
+          const firstTitle = first.track?.title || 'Unknown Track';
+          const firstArtist = first.track?.artist ?? undefined;
+          const firstAlbum = first.track?.album ?? undefined;
+          const firstDuration = first.track?.duration ?? undefined;
+          const firstCover = first.track?.coverArt ?? undefined;
+          const firstPath = first.source?.sourceUrl || firstTitle;
+
+          let firstSource: AudioSource;
+          if (firstPath.startsWith('http://') || firstPath.startsWith('https://')) {
+            firstSource = new HttpAudioSource(firstPath, {
+              title: firstTitle,
+              artist: firstArtist ?? null,
+              album: firstAlbum ?? null,
+              duration: firstDuration ?? null,
+            });
+          } else {
+            firstSource = new LocalAudioSource(firstPath, undefined, probeAudioMetadata);
+          }
+
+          const userTag = member.displayName || member.user?.username;
+          await playbackManager.play(guildId, firstSource, {
+            name: firstTitle,
+            path: firstPath,
+            duration: firstDuration,
+            artist: firstArtist,
+            album: firstAlbum,
+            thumbnailUrl: firstCover,
+            sourceProvider: first.source?.provider || 'local',
+            sourceUrl: first.source?.sourceUrl || undefined,
+            addedBy: userTag,
+            userId,
+          });
+
+          for (let i = 1; i < tracks.length; i++) {
+            const item = tracks[i];
+            const itemTitle = item.track?.title || 'Unknown Track';
+            const itemPath = item.source?.sourceUrl || itemTitle;
+            playbackManager.queueManager.enqueue(guildId, {
+              name: itemTitle,
+              path: itemPath,
+              duration: item.track?.duration ?? undefined,
+              artist: item.track?.artist ?? undefined,
+              album: item.track?.album ?? undefined,
+              thumbnailUrl: item.track?.coverArt ?? undefined,
+              sourceProvider: item.source?.provider || 'local',
+              sourceUrl: item.source?.sourceUrl || undefined,
+              addedBy: userTag,
+              userId,
+            });
+          }
+
+          await interaction.editReply(
+            `🔥 Enqueued **${tracks.length}** tracks from **🔥 Most Played** playlist.\n▶️ Now playing: **${firstTitle}**${firstArtist ? ` by *${firstArtist}*` : ''}`,
+          );
+          await refreshPanel(guildId, playbackManager).catch(() => {});
           break;
         }
 
