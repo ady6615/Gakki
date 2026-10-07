@@ -61,14 +61,82 @@ export class YouTubeSourceProvider implements MusicSourceProvider, MusicSearchPr
 
   constructor(private readonly artworkService?: ArtworkService) {}
 
+  static isPlaylist(input: string): boolean {
+    const lower = input.toLowerCase().trim();
+    return (
+      (lower.includes('youtube.com/') || lower.includes('music.youtube.com/') || lower.includes('youtu.be/')) &&
+      (lower.includes('list=') || lower.includes('/playlist'))
+    );
+  }
+
   canHandle(input: string): boolean {
     const lower = input.toLowerCase().trim();
     return (
       lower.includes('youtube.com/watch') ||
       lower.includes('youtu.be/') ||
       lower.includes('music.youtube.com/watch') ||
+      lower.includes('youtube.com/playlist') ||
+      lower.includes('music.youtube.com/playlist') ||
+      lower.includes('list=') ||
       lower.startsWith('ytsearch:')
     );
+  }
+
+  /**
+   * Fetch full playlist / collection metadata and video list.
+   */
+  async getPlaylist(input: string): Promise<{
+    title: string;
+    description?: string;
+    thumbnailUrl?: string;
+    tracks: Array<{
+      title: string;
+      artist?: string;
+      duration?: number;
+      sourceUrl: string;
+      thumbnailUrl?: string;
+      provider: string;
+    }>;
+  }> {
+    try {
+      const playlist = await play.playlist_info(input, { incomplete: true });
+      const videos = await playlist.all_videos();
+      const tracks = videos.map((v) => ({
+        title: v.title || 'YouTube Track',
+        artist: v.channel?.name || 'YouTube',
+        duration: v.durationInSec || undefined,
+        sourceUrl: v.url,
+        thumbnailUrl: v.thumbnails?.[0]?.url,
+        provider: this.name,
+      }));
+      return {
+        title: playlist.title || 'YouTube Playlist',
+        description: `YouTube Playlist (${tracks.length} tracks)`,
+        thumbnailUrl: playlist.thumbnail?.url,
+        tracks,
+      };
+    } catch {
+      // yt-dlp fallback
+      const output = (await youtubedl(
+        input,
+        getYtDlpFlags({ dumpSingleJson: true, flatPlaylist: true }),
+      )) as any;
+      const entries: any[] = output.entries || [];
+      const tracks = entries.map((e) => ({
+        title: e.title || 'YouTube Track',
+        artist: e.uploader || e.channel || 'YouTube',
+        duration: e.duration || undefined,
+        sourceUrl: e.url || `https://www.youtube.com/watch?v=${e.id}`,
+        thumbnailUrl: e.thumbnail || (e.thumbnails?.[0]?.url),
+        provider: this.name,
+      }));
+      return {
+        title: output.title || 'YouTube Playlist',
+        description: `YouTube Playlist (${tracks.length} tracks)`,
+        thumbnailUrl: output.thumbnails?.[0]?.url,
+        tracks,
+      };
+    }
   }
 
   /**

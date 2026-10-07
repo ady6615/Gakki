@@ -5,9 +5,13 @@ import type {
   AudioSourceManager,
   TrackManager,
   QueueTrack,
+  AudioSource,
 } from '@gakki/core';
 import { LocalAudioSource, HttpAudioSource } from '@gakki/core';
 import { broadcastPlaylistEvent } from '../../websocket';
+import { SpotifyParser } from '../../audio/spotify-parser';
+import { YouTubeSourceProvider } from '../../sources/youtube.provider';
+import { probeAudioMetadata } from '../../audio/ffmpeg';
 
 export function playlistRoutes(
   playlistManager?: PlaylistManager,
@@ -179,13 +183,97 @@ export function playlistRoutes(
       const { id } = req.params;
       let { trackId, input, addedBy } = req.body;
 
-      if (!trackId && input && audioSourceManager) {
-        // Resolve input via audio source manager and persist track
-        const resolved = await audioSourceManager.resolve(input);
-        if (trackManager) {
+      if (!trackId && input) {
+        // 1. Check if input is a Spotify playlist or album
+        const spotifyParsed = SpotifyParser.parseIdentifier(input);
+        if (spotifyParsed && (spotifyParsed.type === 'playlist' || spotifyParsed.type === 'album')) {
+          try {
+            const collection = await SpotifyParser.getCollection(input);
+            const addedTracks: any[] = [];
+            for (const t of collection.tracks) {
+              if (trackManager) {
+                const saved = await trackManager.saveTrackWithSource(
+                  {
+                    title: t.title,
+                    artist: t.artist,
+                    album: t.album || collection.title,
+                    duration: t.durationSec,
+                    thumbnailUrl: t.thumbnailUrl,
+                  },
+                  {
+                    provider: 'spotify',
+                    sourceType: 'stream',
+                    sourceUrl: t.spotifyUrl,
+                  },
+                );
+                const pt = await playlistManager.addTrackToPlaylist(id, saved.track.id, addedBy);
+                addedTracks.push(pt);
+              }
+            }
+            broadcastPlaylistEvent({
+              type: 'playlist.track.added',
+              playlistId: id,
+            });
+            res.status(201).json({ addedCount: addedTracks.length, tracks: addedTracks });
+            return;
+          } catch (spErr) {
+            // fall through
+          }
+        }
+
+        // 2. Check if input is a YouTube playlist
+        if (YouTubeSourceProvider.isPlaylist(input)) {
+          try {
+            const ytProvider = new YouTubeSourceProvider();
+            const collection = await ytProvider.getPlaylist(input);
+            const addedTracks: any[] = [];
+            for (const t of collection.tracks) {
+              if (trackManager) {
+                const saved = await trackManager.saveTrackWithSource(
+                  {
+                    title: t.title,
+                    artist: t.artist,
+                    album: collection.title,
+                    duration: t.duration,
+                    thumbnailUrl: t.thumbnailUrl,
+                  },
+                  {
+                    provider: 'youtube',
+                    sourceType: 'stream',
+                    sourceUrl: t.sourceUrl,
+                  },
+                );
+                const pt = await playlistManager.addTrackToPlaylist(id, saved.track.id, addedBy);
+                addedTracks.push(pt);
+              }
+            }
+            broadcastPlaylistEvent({
+              type: 'playlist.track.added',
+              playlistId: id,
+            });
+            res.status(201).json({ addedCount: addedTracks.length, tracks: addedTracks });
+            return;
+          } catch (ytErr) {
+            // fall through
+          }
+        }
+
+        // 3. Single track resolution
+        if (audioSourceManager && audioSourceManager.canHandle(input)) {
+          const resolved = await audioSourceManager.resolve(input);
+          if (trackManager) {
+            const saved = await trackManager.saveTrackWithSource(
+              resolved.metadata,
+              resolved.source,
+            );
+            trackId = saved.track.id;
+          }
+        } else if (trackManager) {
+          const localSource = new LocalAudioSource(input, undefined, probeAudioMetadata);
+          const meta = await localSource.getMetadata().catch(() => ({ title: input }));
           const saved = await trackManager.saveTrackWithSource(
-            resolved.metadata,
-            resolved.source,
+            meta,
+            { provider: 'local', sourceType: 'file', sourceUrl: input },
           );
           trackId = saved.track.id;
         }
@@ -318,16 +406,11 @@ export function playlistRoutes(
       let skippedCount = 0;
 
       for (const pt of playlistData.tracks) {
-        if (!pt.source || !pt.source.sourceUrl) {
+        const trackPath = pt.source?.sourceUrl || (pt.track?.artist ? `${pt.track.artist} - ${pt.track.title}` : pt.track?.title);
+        if (!trackPath) {
           skippedCount++;
           continue;
         }
-
-        const trackPath = pt.source.sourceUrl;
-        const isStream =
-          pt.source.sourceType === 'stream' ||
-          trackPath.startsWith('http://') ||
-          trackPath.startsWith('https://');
 
         const queueTrack: QueueTrack = {
           id: pt.id || pt.trackId,
@@ -338,9 +421,9 @@ export function playlistRoutes(
           artist: pt.track?.artist ?? undefined,
           album: pt.track?.album ?? undefined,
           thumbnailUrl: pt.track?.coverArt ?? undefined,
-          sourceProvider: pt.source.provider,
+          sourceProvider: pt.source?.provider || 'YouTube',
           sourceUrl: trackPath,
-          source: pt.source.provider,
+          source: pt.source?.provider || 'YouTube',
           artwork: pt.track?.coverArt ?? undefined,
           addedBy: pt.addedBy || 'Playlist',
         };
@@ -349,15 +432,48 @@ export function playlistRoutes(
         const playerStatus = playbackManager.getPlaybackStatus(guildId);
 
         if (!currentTrack && playerStatus === 'IDLE' && enqueuedCount === 0) {
-          // Play first track immediately
-          const audioSource = isStream
-            ? new HttpAudioSource(trackPath, {
+          // Play first track immediately with dynamic stream resolution
+          let audioSource: AudioSource;
+          if (trackPath.startsWith('http://') || trackPath.startsWith('https://')) {
+            if (audioSourceManager && audioSourceManager.canHandle(trackPath)) {
+              try {
+                const resolved = await audioSourceManager.resolve(trackPath);
+                if (resolved.isStream || resolved.streamUrlOrPath.startsWith('http')) {
+                  audioSource = new HttpAudioSource(resolved.streamUrlOrPath, resolved.metadata);
+                } else {
+                  audioSource = new LocalAudioSource(resolved.streamUrlOrPath, undefined, probeAudioMetadata);
+                }
+              } catch {
+                audioSource = new HttpAudioSource(trackPath, {
+                  title: queueTrack.name,
+                  artist: queueTrack.artist,
+                  album: queueTrack.album,
+                  duration: queueTrack.duration,
+                });
+              }
+            } else {
+              audioSource = new HttpAudioSource(trackPath, {
                 title: queueTrack.name,
                 artist: queueTrack.artist,
                 album: queueTrack.album,
                 duration: queueTrack.duration,
-              })
-            : new LocalAudioSource(trackPath);
+              });
+            }
+          } else if (audioSourceManager) {
+            const query = trackPath.startsWith('ytsearch:') ? trackPath : `ytsearch:${trackPath}`;
+            try {
+              const resolved = await audioSourceManager.resolve(query);
+              if (resolved.isStream || resolved.streamUrlOrPath.startsWith('http')) {
+                audioSource = new HttpAudioSource(resolved.streamUrlOrPath, resolved.metadata);
+              } else {
+                audioSource = new LocalAudioSource(resolved.streamUrlOrPath, undefined, probeAudioMetadata);
+              }
+            } catch {
+              audioSource = new LocalAudioSource(trackPath, undefined, probeAudioMetadata);
+            }
+          } else {
+            audioSource = new LocalAudioSource(trackPath, undefined, probeAudioMetadata);
+          }
 
           await playbackManager.play(guildId, audioSource, queueTrack);
         } else {

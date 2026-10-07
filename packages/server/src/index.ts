@@ -81,9 +81,9 @@ async function main(): Promise<void> {
   });
   const trackManager = new TrackManager(dbClient);
   const analyticsLogger = createLogger('analytics-manager');
-  const analyticsManager = new AnalyticsManager(dbClient, analyticsLogger);
+  const analyticsManager = new AnalyticsManager(dbClient, analyticsLogger, trackManager);
   const playlistLogger = createLogger('playlist-manager');
-  const playlistManager = new PlaylistManager(dbClient, playlistLogger);
+  const playlistManager = new PlaylistManager(dbClient, playlistLogger, trackManager);
 
   // ── Phase 7: AI Recommendation & Dynamic DJ Manager ─────────────
   const recLogger = createLogger('ai-recommendation');

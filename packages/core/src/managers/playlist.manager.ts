@@ -47,6 +47,9 @@ export class PlaylistManager {
     private readonly logger: Logger,
     private trackManager?: TrackManager | null,
   ) {
+    if (!this.trackManager && this.db) {
+      this.trackManager = new TrackManager(this.db);
+    }
     this.logger.debug('PlaylistManager initialized');
   }
 
@@ -133,6 +136,12 @@ export class PlaylistManager {
         .limit(1);
 
       if (playlistRows.length === 0) {
+        // Fallback to in-memory store in case it was created in memory
+        const inMem = this.inMemoryPlaylists.get(playlistId);
+        if (inMem) {
+          const tracks = this.inMemoryTracks.get(playlistId) || [];
+          return { playlist: { ...inMem, trackCount: tracks.length }, tracks };
+        }
         return null;
       }
 
@@ -203,7 +212,12 @@ export class PlaylistManager {
 
       return { playlist, tracks };
     } catch (err) {
-      this.logger.error({ err, playlistId }, 'Failed to get playlist');
+      this.logger.error({ err, playlistId }, 'Failed to get playlist from database, trying in-memory');
+      const inMem = this.inMemoryPlaylists.get(playlistId);
+      if (inMem) {
+        const tracks = this.inMemoryTracks.get(playlistId) || [];
+        return { playlist: { ...inMem, trackCount: tracks.length }, tracks };
+      }
       return null;
     }
   }
@@ -908,11 +922,12 @@ export class PlaylistManager {
       await this.db.delete(schema.playlistTracks).where(eq(schema.playlistTracks.playlistId, playlist.id));
     }
 
+    const tm = this.trackManager || new TrackManager(this.db);
+
     // Persist each track and add to playlist
     for (const t of input.tracks) {
-      let trackId: string | null = null;
-      if (this.trackManager) {
-        const saved = await this.trackManager.saveTrackWithSource(
+      try {
+        const saved = await tm.saveTrackWithSource(
           {
             title: t.title,
             artist: t.artist ?? null,
@@ -927,11 +942,11 @@ export class PlaylistManager {
             sourceUrl: t.sourceUrl || '',
           },
         );
-        trackId = saved.track.id;
-      }
-
-      if (trackId) {
-        await this.addTrackToPlaylist(playlist.id, trackId, input.ownerUserId);
+        if (saved?.track?.id) {
+          await this.addTrackToPlaylist(playlist.id, saved.track.id, input.ownerUserId);
+        }
+      } catch (trackErr) {
+        this.logger.warn({ trackErr, title: t.title }, 'Failed to save track in external playlist');
       }
     }
 
@@ -968,19 +983,34 @@ export class PlaylistManager {
     }
 
     // Fetch top tracks from analytics if available
-    let topTracks: Array<{ trackId: string }> = [];
+    let topTracks: Array<{ trackId?: string; title?: string; artist?: string | null }> = [];
     if (analyticsManager) {
       const stats = await analyticsManager.getDashboardStats({ guildId, timeRange: 'all' });
       topTracks = (stats.topTracks || stats.mostPlayedTracks || []).slice(0, limit);
     }
 
+    const tm = this.trackManager || (this.db ? new TrackManager(this.db) : null);
+    let count = 0;
     for (const t of topTracks) {
-      if (t.trackId) {
-        await this.addTrackToPlaylist(playlist.id, t.trackId);
+      let trackId = t.trackId;
+      if (!trackId && t.title && tm) {
+        try {
+          const saved = await tm.saveTrackWithSource(
+            { title: t.title, artist: t.artist ?? null },
+            { provider: 'youtube', sourceType: 'stream', sourceUrl: t.title },
+          );
+          trackId = saved.track.id;
+        } catch {
+          // ignore
+        }
+      }
+      if (trackId) {
+        await this.addTrackToPlaylist(playlist.id, trackId);
+        count++;
       }
     }
 
-    playlist.trackCount = topTracks.length;
+    playlist.trackCount = count;
     return playlist;
   }
 }

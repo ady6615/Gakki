@@ -21,6 +21,7 @@ import {
   type AiRecommendationManager,
   type AudioSource,
 } from '@gakki/core';
+import * as fs from 'node:fs';
 import { probeAudioMetadata } from '../audio/ffmpeg';
 import { spawnControlPanelInChannel, refreshPanel } from './control-panel';
 import { formatDuration } from './commands';
@@ -258,7 +259,7 @@ export async function handleQuickPlayInteraction(
   const guildId = interaction.guildId;
   if (!guildId) return;
 
-  const { playbackManager, analyticsManager, playlistManager, trackManager, recManager } = context;
+  const { playbackManager, analyticsManager, playlistManager, trackManager, recManager, audioSourceManager } = context;
   const customId = interaction.customId;
   const userTag = (interaction.member as GuildMember)?.displayName || interaction.user.username;
 
@@ -296,14 +297,14 @@ export async function handleQuickPlayInteraction(
         const plDetails = await playlistManager.getPlaylist(mostPlayedPl.id);
         if (plDetails && plDetails.tracks.length > 0) {
           tracksToPlay = plDetails.tracks
-            .filter((pt) => !!pt.track)
+            .filter((pt) => !!pt.track || !!pt.source)
             .map((pt) => ({
               title: pt.track?.title || 'Unknown Track',
               artist: pt.track?.artist ?? null,
               album: pt.track?.album ?? null,
               duration: pt.track?.duration ?? null,
-              sourceUrl: pt.source?.sourceUrl || pt.track?.title || 'Unknown',
-              provider: pt.source?.provider || 'local',
+              sourceUrl: pt.source?.sourceUrl || (pt.track?.artist ? `${pt.track.artist} - ${pt.track.title}` : pt.track?.title) || 'Unknown',
+              provider: pt.source?.provider || 'youtube',
             }));
         }
       }
@@ -311,14 +312,27 @@ export async function handleQuickPlayInteraction(
       if (tracksToPlay.length === 0 && analyticsManager) {
         const stats = await analyticsManager.getDashboardStats({ guildId, timeRange: 'all' });
         const top = stats.topTracks || stats.mostPlayedTracks || [];
-        tracksToPlay = top.map((t) => ({
-          title: t.title,
-          artist: t.artist,
-          album: null,
-          duration: t.duration,
-          sourceUrl: t.title,
-          provider: 'local',
-        }));
+        tracksToPlay = await Promise.all(
+          top.map(async (t) => {
+            let srcUrl: string | null = null;
+            let provider = 'youtube';
+            if (trackManager && t.trackId) {
+              const src = await trackManager.getPrimarySourceByTrackId(t.trackId).catch(() => null);
+              if (src?.sourceUrl) {
+                srcUrl = src.sourceUrl;
+                provider = src.provider;
+              }
+            }
+            return {
+              title: t.title,
+              artist: t.artist,
+              album: null,
+              duration: t.duration,
+              sourceUrl: srcUrl || (t.artist ? `${t.artist} - ${t.title}` : t.title),
+              provider,
+            };
+          }),
+        );
       }
 
       if (tracksToPlay.length === 0) {
@@ -327,7 +341,7 @@ export async function handleQuickPlayInteraction(
       }
 
       // Enqueue and start playing
-      await playTrackList(guildId, tracksToPlay, playbackManager, userTag, interaction.user.id);
+      await playTrackList(guildId, tracksToPlay, playbackManager, userTag, interaction.user.id, audioSourceManager);
 
       const embed = new EmbedBuilder()
         .setTitle('🔥 Playing Most Played Playlist')
@@ -356,13 +370,26 @@ export async function handleQuickPlayInteraction(
       if (analyticsManager) {
         const recent = await analyticsManager.getRecentTracks(guildId, 15);
         if (recent.length > 0) {
-          recentTracks = recent.map((r) => ({
-            title: r.title,
-            artist: r.artist,
-            duration: null,
-            sourceUrl: r.title,
-            provider: 'local',
-          }));
+          recentTracks = await Promise.all(
+            recent.map(async (r) => {
+              let srcUrl: string | null = null;
+              let provider = 'youtube';
+              if (trackManager && r.trackId) {
+                const src = await trackManager.getPrimarySourceByTrackId(r.trackId).catch(() => null);
+                if (src?.sourceUrl) {
+                  srcUrl = src.sourceUrl;
+                  provider = src.provider;
+                }
+              }
+              return {
+                title: r.title,
+                artist: r.artist,
+                duration: null,
+                sourceUrl: srcUrl || (r.artist ? `${r.artist} - ${r.title}` : r.title),
+                provider,
+              };
+            }),
+          );
         }
       }
 
@@ -372,7 +399,7 @@ export async function handleQuickPlayInteraction(
           title: t.title,
           artist: t.artist,
           duration: t.duration,
-          sourceUrl: t.source?.sourceUrl || t.title,
+          sourceUrl: t.source?.sourceUrl || (t.artist ? `${t.artist} - ${t.title}` : t.title),
           provider: t.source?.provider || 'local',
         }));
       }
@@ -382,7 +409,7 @@ export async function handleQuickPlayInteraction(
         return;
       }
 
-      await playTrackList(guildId, recentTracks, playbackManager, userTag, interaction.user.id);
+      await playTrackList(guildId, recentTracks, playbackManager, userTag, interaction.user.id, audioSourceManager);
 
       const embed = new EmbedBuilder()
         .setTitle('⏪ Playing Recent Songs')
@@ -424,7 +451,7 @@ export async function handleQuickPlayInteraction(
           artist: t.artist,
           album: t.album,
           duration: t.duration,
-          sourceUrl: t.source?.sourceUrl || t.title,
+          sourceUrl: t.source?.sourceUrl || (t.artist ? `${t.artist} - ${t.title}` : t.title),
           provider: t.source?.provider || 'local',
         }));
       }
@@ -434,7 +461,7 @@ export async function handleQuickPlayInteraction(
         return;
       }
 
-      await playTrackList(guildId, genreTracks, playbackManager, userTag, interaction.user.id);
+      await playTrackList(guildId, genreTracks, playbackManager, userTag, interaction.user.id, audioSourceManager);
 
       const embed = new EmbedBuilder()
         .setTitle(`🎧 Playing ${targetGenre} Genre Mix`)
@@ -457,6 +484,7 @@ export async function handleQuickPlayInteraction(
         artist?: string | null;
         duration?: number | null;
         sourceUrl?: string | null;
+        provider?: string | null;
       }> = [];
 
       if (recManager) {
@@ -481,7 +509,8 @@ export async function handleQuickPlayInteraction(
               title: r.title || r.name,
               artist: r.artist ?? null,
               duration: r.duration ?? null,
-              sourceUrl: r.path || r.sourceUrl || r.title,
+              sourceUrl: r.path || r.sourceUrl || (r.artist ? `${r.artist} - ${r.title || r.name}` : r.title || r.name),
+              provider: r.sourceProvider || 'youtube',
             }));
           }
         } catch {
@@ -493,12 +522,24 @@ export async function handleQuickPlayInteraction(
         const all = await trackManager.getAllTracks(25);
         // Shuffle
         const shuffled = [...all].sort(() => Math.random() - 0.5).slice(0, 15);
-        vibeTracks = shuffled.map((t) => ({
-          title: t.title,
-          artist: t.artist,
-          duration: t.duration,
-          sourceUrl: t.title,
-        }));
+        vibeTracks = await Promise.all(
+          shuffled.map(async (t) => {
+            let srcUrl: string | null = null;
+            let provider = 'local';
+            const src = await trackManager.getPrimarySourceByTrackId(t.id).catch(() => null);
+            if (src?.sourceUrl) {
+              srcUrl = src.sourceUrl;
+              provider = src.provider;
+            }
+            return {
+              title: t.title,
+              artist: t.artist,
+              duration: t.duration,
+              sourceUrl: srcUrl || (t.artist ? `${t.artist} - ${t.title}` : t.title),
+              provider,
+            };
+          }),
+        );
       }
 
       if (vibeTracks.length === 0) {
@@ -506,7 +547,7 @@ export async function handleQuickPlayInteraction(
         return;
       }
 
-      await playTrackList(guildId, vibeTracks, playbackManager, userTag, interaction.user.id);
+      await playTrackList(guildId, vibeTracks, playbackManager, userTag, interaction.user.id, audioSourceManager);
 
       const embed = new EmbedBuilder()
         .setTitle('🎲 Playing Smart Vibe Mix')
@@ -539,14 +580,15 @@ export async function handleQuickPlayInteraction(
       }
 
       const tracksToPlay = plData.tracks
-        .filter((pt) => !!pt.track)
+        .filter((pt) => !!pt.track || !!pt.source)
         .map((pt) => ({
           title: pt.track?.title || 'Unknown Track',
           artist: pt.track?.artist ?? null,
           album: pt.track?.album ?? null,
           duration: pt.track?.duration ?? null,
-          sourceUrl: pt.source?.sourceUrl || pt.track?.title || 'Unknown',
-          provider: pt.source?.provider || 'local',
+          sourceUrl: pt.source?.sourceUrl || (pt.track?.artist ? `${pt.track.artist} - ${pt.track.title}` : pt.track?.title) || 'Unknown',
+          provider: pt.source?.provider || 'youtube',
+          thumbnailUrl: pt.track?.coverArt ?? null,
         }));
 
       if (tracksToPlay.length === 0) {
@@ -554,7 +596,7 @@ export async function handleQuickPlayInteraction(
         return;
       }
 
-      await playTrackList(guildId, tracksToPlay, playbackManager, userTag, interaction.user.id);
+      await playTrackList(guildId, tracksToPlay, playbackManager, userTag, interaction.user.id, audioSourceManager);
 
       const embed = new EmbedBuilder()
         .setTitle(`📜 Playing Playlist: ${plData.playlist.name}`)
@@ -591,11 +633,11 @@ export async function handleQuickPlayInteraction(
         artist: t.artist,
         album: t.album,
         duration: t.duration,
-        sourceUrl: t.source?.sourceUrl || t.title,
+        sourceUrl: t.source?.sourceUrl || (t.artist ? `${t.artist} - ${t.title}` : t.title),
         provider: t.source?.provider || 'local',
       }));
 
-      await playTrackList(guildId, tracksToPlay, playbackManager, userTag, interaction.user.id);
+      await playTrackList(guildId, tracksToPlay, playbackManager, userTag, interaction.user.id, audioSourceManager);
 
       const embed = new EmbedBuilder()
         .setTitle(`🎵 Playing ${genreName} Mix`)
@@ -633,20 +675,53 @@ async function playTrackList(
   playbackManager: PlaybackManager,
   addedBy: string,
   userId: string,
+  audioSourceManager?: AudioSourceManager,
 ): Promise<void> {
   if (tracks.length === 0) return;
 
   const first = tracks[0];
-  const firstPath = first.sourceUrl || first.title;
+  const firstPath = first.sourceUrl || (first.artist ? `${first.artist} - ${first.title}` : first.title);
 
   let firstSource: AudioSource;
   if (firstPath.startsWith('http://') || firstPath.startsWith('https://')) {
-    firstSource = new HttpAudioSource(firstPath, {
-      title: first.title,
-      artist: first.artist ?? null,
-      album: first.album ?? null,
-      duration: first.duration ?? null,
-    });
+    if (audioSourceManager && audioSourceManager.canHandle(firstPath)) {
+      try {
+        const resolved = await audioSourceManager.resolve(firstPath);
+        if (resolved.isStream || resolved.streamUrlOrPath.startsWith('http')) {
+          firstSource = new HttpAudioSource(resolved.streamUrlOrPath, resolved.metadata);
+        } else {
+          firstSource = new LocalAudioSource(resolved.streamUrlOrPath, undefined, probeAudioMetadata);
+        }
+      } catch {
+        firstSource = new HttpAudioSource(firstPath, {
+          title: first.title,
+          artist: first.artist ?? null,
+          album: first.album ?? null,
+          duration: first.duration ?? null,
+        });
+      }
+    } else {
+      firstSource = new HttpAudioSource(firstPath, {
+        title: first.title,
+        artist: first.artist ?? null,
+        album: first.album ?? null,
+        duration: first.duration ?? null,
+      });
+    }
+  } else if (fs.existsSync(firstPath)) {
+    firstSource = new LocalAudioSource(firstPath, undefined, probeAudioMetadata);
+  } else if (audioSourceManager) {
+    const query = firstPath.startsWith('ytsearch:') ? firstPath : `ytsearch:${firstPath}`;
+    try {
+      const resolved = await audioSourceManager.resolve(query);
+      if (resolved.isStream || resolved.streamUrlOrPath.startsWith('http')) {
+        firstSource = new HttpAudioSource(resolved.streamUrlOrPath, resolved.metadata);
+      } else {
+        firstSource = new LocalAudioSource(resolved.streamUrlOrPath, undefined, probeAudioMetadata);
+      }
+    } catch {
+      firstSource = new LocalAudioSource(firstPath, undefined, probeAudioMetadata);
+    }
   } else {
     firstSource = new LocalAudioSource(firstPath, undefined, probeAudioMetadata);
   }
@@ -659,7 +734,7 @@ async function playTrackList(
     artist: first.artist ?? undefined,
     album: first.album ?? undefined,
     thumbnailUrl: first.thumbnailUrl ?? undefined,
-    sourceProvider: first.provider || 'Local Library',
+    sourceProvider: first.provider || 'Library',
     sourceUrl: first.sourceUrl ?? undefined,
     addedBy,
     userId,
@@ -668,7 +743,7 @@ async function playTrackList(
   // Enqueue the rest
   for (let i = 1; i < tracks.length; i++) {
     const t = tracks[i];
-    const tPath = t.sourceUrl || t.title;
+    const tPath = t.sourceUrl || (t.artist ? `${t.artist} - ${t.title}` : t.title);
     playbackManager.queueManager.enqueue(guildId, {
       name: t.title,
       path: tPath,
@@ -676,7 +751,7 @@ async function playTrackList(
       artist: t.artist ?? undefined,
       album: t.album ?? undefined,
       thumbnailUrl: t.thumbnailUrl ?? undefined,
-      sourceProvider: t.provider || 'Local Library',
+      sourceProvider: t.provider || 'Library',
       sourceUrl: t.sourceUrl ?? undefined,
       addedBy,
       userId,

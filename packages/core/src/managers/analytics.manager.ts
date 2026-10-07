@@ -98,6 +98,9 @@ export class AnalyticsManager {
     private readonly logger: Logger,
     private trackManager?: TrackManager | null,
   ) {
+    if (!this.trackManager && this.db) {
+      this.trackManager = new TrackManager(this.db);
+    }
     this.logger.debug('AnalyticsManager initialized');
   }
 

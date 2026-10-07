@@ -31,6 +31,7 @@ import {
 import { probeAudioMetadata } from '../audio/ffmpeg';
 import { spawnControlPanel, refreshPanel } from './control-panel';
 import { listLocalAudioFiles, listLocalFolders } from '../audio/local-files';
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { enqueueFolder, enqueueMultipleFiles, isAudioFolder } from '../audio/batch-loader';
 import { globalRateLimiter } from '../security/rate-limiter';
@@ -1082,6 +1083,110 @@ export async function handleChatInputCommand(
         }
       }
 
+      // Handle YouTube Playlist in /play
+      if (YouTubeSourceProvider.isPlaylist(input)) {
+        try {
+          const ytProvider = new YouTubeSourceProvider();
+          const collection = await ytProvider.getPlaylist(input);
+          if (collection.tracks.length === 0) {
+            await interaction.editReply(`YouTube Playlist "${collection.title}" has no tracks.`);
+            return;
+          }
+
+          const userTag = member?.displayName || interaction.user.username;
+          const first = collection.tracks[0];
+          const srcManager = audioSourceManager || createConfiguredAudioSourceManager();
+          const firstResolved = await srcManager.resolve(first.sourceUrl);
+
+          let firstSource: AudioSource;
+          if (
+            firstResolved.isStream ||
+            firstResolved.source.sourceType === 'stream' ||
+            firstResolved.streamUrlOrPath.startsWith('http://') ||
+            firstResolved.streamUrlOrPath.startsWith('https://')
+          ) {
+            firstSource = new HttpAudioSource(firstResolved.streamUrlOrPath, firstResolved.metadata);
+          } else {
+            firstSource = new LocalAudioSource(firstResolved.streamUrlOrPath, undefined, probeAudioMetadata);
+          }
+
+          await playbackManager.play(guildId, firstSource, {
+            name: firstResolved.title,
+            path: firstResolved.streamUrlOrPath,
+            duration: firstResolved.metadata.duration ?? undefined,
+            artist: firstResolved.metadata.artist ?? undefined,
+            album: firstResolved.metadata.album ?? undefined,
+            thumbnailUrl: firstResolved.metadata.thumbnailUrl ?? collection.thumbnailUrl,
+            sourceProvider: 'YouTube',
+            sourceUrl: first.sourceUrl,
+            addedBy: userTag,
+            userId: member?.user?.id || member?.id,
+          });
+
+          // Enqueue the rest of the collection
+          for (let i = 1; i < collection.tracks.length; i++) {
+            const t = collection.tracks[i];
+            playbackManager.queueManager.enqueue(guildId, {
+              name: t.artist ? `${t.artist} - ${t.title}` : t.title,
+              path: t.sourceUrl,
+              duration: t.duration,
+              artist: t.artist,
+              album: collection.title,
+              thumbnailUrl: t.thumbnailUrl || collection.thumbnailUrl,
+              sourceProvider: 'YouTube',
+              sourceUrl: t.sourceUrl,
+              addedBy: userTag,
+              userId: member?.user?.id || member?.id,
+            });
+          }
+
+          // Persist imported playlist and tracks in PostgreSQL if managers available
+          if (playlistManager && trackManager) {
+            try {
+              const collectionName = collection.title || 'YouTube Playlist';
+              await playlistManager.saveExternalPlaylist({
+                name: collectionName,
+                description: `Imported YouTube Playlist (${collection.tracks.length} tracks)`,
+                guildId,
+                ownerUserId: member?.user?.id || member?.id,
+                tracks: collection.tracks.map((t) => ({
+                  title: t.title,
+                  artist: t.artist,
+                  album: collection.title,
+                  duration: t.duration,
+                  sourceUrl: t.sourceUrl,
+                  provider: 'youtube',
+                  thumbnailUrl: t.thumbnailUrl || collection.thumbnailUrl,
+                })),
+              });
+              logger.info({ collectionName, tracksCount: collection.tracks.length }, '[DB] Persisted imported YouTube playlist to database');
+            } catch (dbErr) {
+              logger.warn({ dbErr }, '[DB] Could not save external playlist');
+            }
+          }
+
+          const embed = new EmbedBuilder()
+            .setTitle(`▶️ Queued YouTube Playlist: ${collection.title}`)
+            .setDescription(
+              `Loaded **${collection.tracks.length}** tracks into queue.\n` +
+              `▶️ **Now Playing:** **${firstResolved.title}**${firstResolved.metadata.artist ? ` by *${firstResolved.metadata.artist}*` : ''}`,
+            )
+            .setColor(0xff0000)
+            .setFooter({ text: `Requested by ${userTag}` });
+
+          if (collection.thumbnailUrl) {
+            embed.setThumbnail(collection.thumbnailUrl);
+          }
+
+          await interaction.editReply({ embeds: [embed] });
+          return;
+        } catch (ytErr: any) {
+          logger.warn({ ytErr, input }, '[AUDIO] Failed to enqueue YouTube playlist');
+          await interaction.editReply(`Failed to load YouTube playlist: ${ytErr.message}`);
+          return;
+        }
+      }
+
       const srcManager = audioSourceManager || createConfiguredAudioSourceManager();
 
       let source: AudioSource;
@@ -1832,15 +1937,15 @@ export async function handleChatInputCommand(
           let skippedCount = 0;
 
           for (const pt of playlistData.tracks) {
-            if (!pt.source || !pt.source.sourceUrl) {
-              logger.warn({ trackId: pt.trackId, title: pt.track?.title }, '[PLAYLIST] Skipped unavailable track');
+            const trackPath = pt.source?.sourceUrl || (pt.track?.artist ? `${pt.track.artist} - ${pt.track.title}` : pt.track?.title);
+            if (!trackPath) {
+              logger.warn({ trackId: pt.trackId, title: pt.track?.title }, '[PLAYLIST] Skipped track with no title or path');
               skippedCount++;
               continue;
             }
 
-            const trackPath = pt.source.sourceUrl;
             const isStream =
-              pt.source.sourceType === 'stream' ||
+              pt.source?.sourceType === 'stream' ||
               trackPath.startsWith('http://') ||
               trackPath.startsWith('https://');
 
@@ -1853,9 +1958,9 @@ export async function handleChatInputCommand(
               artist: pt.track?.artist ?? undefined,
               album: pt.track?.album ?? undefined,
               thumbnailUrl: pt.track?.coverArt ?? undefined,
-              sourceProvider: pt.source.provider,
+              sourceProvider: pt.source?.provider || 'YouTube',
               sourceUrl: trackPath,
-              source: pt.source.provider,
+              source: pt.source?.provider || 'YouTube',
               artwork: pt.track?.coverArt ?? undefined,
               addedBy: pt.addedBy || member.displayName || member.user?.username,
               userId,
@@ -1872,7 +1977,14 @@ export async function handleChatInputCommand(
                     album: queueTrack.album,
                     duration: queueTrack.duration,
                   })
-                : new LocalAudioSource(trackPath, undefined, probeAudioMetadata);
+                : fs.existsSync(trackPath)
+                  ? new LocalAudioSource(trackPath, undefined, probeAudioMetadata)
+                  : new HttpAudioSource(trackPath, {
+                      title: queueTrack.name,
+                      artist: queueTrack.artist,
+                      album: queueTrack.album,
+                      duration: queueTrack.duration,
+                    });
 
               await playbackManager.play(guildId, audioSource, queueTrack);
             } else {
@@ -1900,7 +2012,85 @@ export async function handleChatInputCommand(
             return;
           }
 
-          // Resolve track via AudioSourceManager & TrackManager
+          // 1. Check if trackInput is a Spotify Playlist or Album
+          const spotifyParsed = SpotifyParser.parseIdentifier(trackInput);
+          if (spotifyParsed && (spotifyParsed.type === 'playlist' || spotifyParsed.type === 'album')) {
+            try {
+              const collection = await SpotifyParser.getCollection(trackInput);
+              let addedCount = 0;
+              for (const t of collection.tracks) {
+                if (trackManager) {
+                  const saved = await trackManager.saveTrackWithSource(
+                    {
+                      title: t.title,
+                      artist: t.artist,
+                      album: t.album || collection.title,
+                      duration: t.durationSec,
+                      thumbnailUrl: t.thumbnailUrl,
+                    },
+                    {
+                      provider: 'spotify',
+                      sourceType: 'stream',
+                      sourceUrl: t.spotifyUrl,
+                    },
+                  );
+                  await playlistManager.addTrackToPlaylist(
+                    playlist.id,
+                    saved.track.id,
+                    member.displayName || member.user?.username,
+                  );
+                  addedCount++;
+                }
+              }
+              await interaction.editReply(
+                `✅ Added **${addedCount}** tracks from Spotify ${collection.type} **${collection.title}** to playlist **${playlist.name}**`,
+              );
+              break;
+            } catch (spErr: any) {
+              logger.warn({ spErr }, 'Failed to import Spotify collection into playlist');
+            }
+          }
+
+          // 2. Check if trackInput is a YouTube Playlist
+          if (YouTubeSourceProvider.isPlaylist(trackInput)) {
+            try {
+              const ytProvider = new YouTubeSourceProvider();
+              const collection = await ytProvider.getPlaylist(trackInput);
+              let addedCount = 0;
+              for (const t of collection.tracks) {
+                if (trackManager) {
+                  const saved = await trackManager.saveTrackWithSource(
+                    {
+                      title: t.title,
+                      artist: t.artist,
+                      album: collection.title,
+                      duration: t.duration,
+                      thumbnailUrl: t.thumbnailUrl,
+                    },
+                    {
+                      provider: 'youtube',
+                      sourceType: 'stream',
+                      sourceUrl: t.sourceUrl,
+                    },
+                  );
+                  await playlistManager.addTrackToPlaylist(
+                    playlist.id,
+                    saved.track.id,
+                    member.displayName || member.user?.username,
+                  );
+                  addedCount++;
+                }
+              }
+              await interaction.editReply(
+                `✅ Added **${addedCount}** tracks from YouTube Playlist **${collection.title}** to playlist **${playlist.name}**`,
+              );
+              break;
+            } catch (ytErr: any) {
+              logger.warn({ ytErr }, 'Failed to import YouTube playlist into playlist');
+            }
+          }
+
+          // 3. Single track resolution
           const srcManager = audioSourceManager || createConfiguredAudioSourceManager();
           let resolvedTrackId: string | null = null;
           let trackTitle = trackInput;
