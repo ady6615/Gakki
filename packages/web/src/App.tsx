@@ -448,7 +448,16 @@ function App() {
         {/* 5. Statistics Tab */}
         {activeMainTab === 'analytics' && (
           <div className="analytics-tab-layout">
-            <AnalyticsDashboard guildId={guildId} />
+            <AnalyticsDashboard
+              guildId={guildId}
+              onEnqueueTrack={(trackTitle) => {
+                fetch(`/api/queue/${guildId}/tracks`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ files: [trackTitle], addedBy: 'Statistics Dashboard' }),
+                }).then(() => refreshAuthoritativeState(guildId));
+              }}
+            />
           </div>
         )}
 
