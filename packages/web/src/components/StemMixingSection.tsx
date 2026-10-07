@@ -318,14 +318,18 @@ export function StemMixingSection() {
           </h3>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
-            <div style={{ padding: '10px', background: 'rgba(0,0,0,0.2)', borderRadius: '6px' }}>
+            <div style={{ padding: '10px', background: 'rgba(0,0,0,0.2)', borderRadius: '6px', minWidth: 0, overflow: 'hidden' }}>
               <div style={{ fontSize: '11px', color: '#7f8c8d', textTransform: 'uppercase' }}>CURRENT</div>
-              <div style={{ fontWeight: 'bold', fontSize: '14px', marginTop: '2px' }}>{liveTransition.currentTrackName}</div>
+              <div style={{ fontWeight: 'bold', fontSize: '14px', marginTop: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={liveTransition.currentTrackName}>
+                {liveTransition.currentTrackName}
+              </div>
             </div>
 
-            <div style={{ padding: '10px', background: 'rgba(0,0,0,0.2)', borderRadius: '6px' }}>
+            <div style={{ padding: '10px', background: 'rgba(0,0,0,0.2)', borderRadius: '6px', minWidth: 0, overflow: 'hidden' }}>
               <div style={{ fontSize: '11px', color: '#7f8c8d', textTransform: 'uppercase' }}>NEXT</div>
-              <div style={{ fontWeight: 'bold', fontSize: '14px', marginTop: '2px' }}>{liveTransition.nextTrackName}</div>
+              <div style={{ fontWeight: 'bold', fontSize: '14px', marginTop: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={liveTransition.nextTrackName}>
+                {liveTransition.nextTrackName}
+              </div>
             </div>
           </div>
 

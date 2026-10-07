@@ -391,24 +391,22 @@ export function PlaylistSection() {
   };
 
   return (
-    <section className="card playlist-section" style={{ marginTop: '2rem', width: '100%', maxWidth: '900px' }}>
-      <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-          <h2 className="card-title" style={{ margin: 0 }}>
+    <section className="playlist-section glass-panel" aria-label="Playlist Management">
+      <div className="playlist-section-header">
+        <div className="playlist-header-left">
+          <h2 className="playlist-main-title">
             {activeTab === 'playlists' ? '📚 PLAYLISTS' : '🕒 RECENT HISTORY'}
           </h2>
-          <div className="tab-group" style={{ display: 'flex', gap: '0.5rem' }}>
+          <div className="playlist-tab-buttons">
             <button
-              className={`btn btn-secondary ${activeTab === 'playlists' ? 'active' : ''}`}
+              className={`playlist-subtab-btn ${activeTab === 'playlists' ? 'active' : ''}`}
               onClick={() => setActiveTab('playlists')}
-              style={{ padding: '0.35rem 0.75rem', fontSize: '0.85rem' }}
             >
               Playlists
             </button>
             <button
-              className={`btn btn-secondary ${activeTab === 'recent' ? 'active' : ''}`}
+              className={`playlist-subtab-btn ${activeTab === 'recent' ? 'active' : ''}`}
               onClick={() => setActiveTab('recent')}
-              style={{ padding: '0.35rem 0.75rem', fontSize: '0.85rem' }}
             >
               Recent History
             </button>
@@ -417,39 +415,38 @@ export function PlaylistSection() {
 
         {activeTab === 'playlists' && (
           <button
-            className="btn btn-primary"
+            className="create-playlist-trigger-btn"
             onClick={() => setShowCreateModal(true)}
-            style={{ padding: '0.4rem 0.9rem', fontSize: '0.85rem' }}
           >
-            + New Playlist
+            ➕ New Playlist
           </button>
         )}
       </div>
 
       {statusMessage && (
-        <div className="status-banner" style={{ margin: '0.75rem 0', padding: '0.5rem 1rem', background: 'rgba(124, 92, 252, 0.15)', borderRadius: '8px', color: '#a78bfa', fontSize: '0.9rem' }}>
+        <div className="status-banner">
           {statusMessage}
         </div>
       )}
 
       {/* Create Playlist Modal / Form */}
       {showCreateModal && (
-        <div className="create-playlist-box" style={{ background: 'rgba(255, 255, 255, 0.03)', padding: '1rem', borderRadius: '8px', marginBottom: '1.25rem', border: '1px solid var(--border-color)' }}>
-          <h3 style={{ fontSize: '1rem', marginBottom: '0.75rem', color: 'var(--text-primary)' }}>Create New Playlist</h3>
-          <form onSubmit={handleCreatePlaylist} style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-            <div style={{ display: 'flex', gap: '0.75rem' }}>
+        <div className="create-playlist-card glass-card">
+          <h3 className="create-form-title">Create New Playlist</h3>
+          <form onSubmit={handleCreatePlaylist} className="create-playlist-form">
+            <div className="form-inputs-row">
               <input
                 type="text"
                 placeholder="Playlist Name (e.g. Synthwave Chill)"
                 value={newPlaylistName}
                 onChange={(e) => setNewPlaylistName(e.target.value)}
-                style={{ flex: 1, padding: '0.5rem 0.75rem', background: '#12121a', border: '1px solid var(--border-color)', color: 'white', borderRadius: '6px' }}
+                className="form-text-input flex-input"
                 required
               />
               <select
                 value={newPlaylistVis}
                 onChange={(e) => setNewPlaylistVis(e.target.value as any)}
-                style={{ padding: '0.5rem', background: '#12121a', border: '1px solid var(--border-color)', color: 'white', borderRadius: '6px' }}
+                className="form-select-input"
               >
                 <option value="guild">Server Shared</option>
                 <option value="private">Private (Me)</option>
@@ -461,13 +458,13 @@ export function PlaylistSection() {
               placeholder="Optional description"
               value={newPlaylistDesc}
               onChange={(e) => setNewPlaylistDesc(e.target.value)}
-              style={{ padding: '0.5rem 0.75rem', background: '#12121a', border: '1px solid var(--border-color)', color: 'white', borderRadius: '6px' }}
+              className="form-text-input"
             />
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
-              <button type="button" className="btn btn-secondary" onClick={() => setShowCreateModal(false)}>
+            <div className="form-actions-row">
+              <button type="button" className="btn-cancel" onClick={() => setShowCreateModal(false)}>
                 Cancel
               </button>
-              <button type="submit" className="btn btn-primary">
+              <button type="submit" className="btn-submit">
                 Create Playlist
               </button>
             </div>
@@ -476,37 +473,26 @@ export function PlaylistSection() {
       )}
 
       {activeTab === 'playlists' ? (
-        <div style={{ display: 'grid', gridTemplateColumns: '260px 1fr', gap: '1.25rem', marginTop: '1rem' }}>
+        <div className="playlist-layout-grid">
           {/* Left Column: Playlist Trees */}
-          <div style={{ borderRight: '1px solid var(--border-color)', paddingRight: '1rem' }}>
+          <div className="playlist-sidebar">
             {/* My Playlists */}
-            <div style={{ marginBottom: '1.5rem' }}>
-              <h4 style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
+            <div className="playlist-category-box">
+              <h4 className="sidebar-group-title">
                 👤 My Playlists ({userPlaylists.length})
               </h4>
               {userPlaylists.length === 0 ? (
-                <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>No personal playlists</p>
+                <p className="sidebar-empty-text">No personal playlists</p>
               ) : (
-                <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                <ul className="playlist-nav-list">
                   {userPlaylists.map((p) => (
                     <li
                       key={p.id}
                       onClick={() => setSelectedPlaylist(p)}
-                      style={{
-                        padding: '0.5rem 0.75rem',
-                        borderRadius: '6px',
-                        cursor: 'pointer',
-                        background: selectedPlaylist?.id === p.id ? 'var(--accent-glow)' : 'transparent',
-                        color: selectedPlaylist?.id === p.id ? 'var(--accent)' : 'var(--text-primary)',
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        fontSize: '0.9rem',
-                        fontWeight: selectedPlaylist?.id === p.id ? 600 : 400,
-                      }}
+                      className={`playlist-nav-item ${selectedPlaylist?.id === p.id ? 'active' : ''}`}
                     >
-                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</span>
-                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{p.trackCount}</span>
+                      <span className="nav-item-name" title={p.name}>{p.name}</span>
+                      <span className="nav-item-count">{p.trackCount}</span>
                     </li>
                   ))}
                 </ul>
@@ -514,33 +500,22 @@ export function PlaylistSection() {
             </div>
 
             {/* Guild Playlists */}
-            <div>
-              <h4 style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
+            <div className="playlist-category-box">
+              <h4 className="sidebar-group-title">
                 🌐 Guild Playlists ({guildPlaylists.length})
               </h4>
               {guildPlaylists.length === 0 ? (
-                <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>No server playlists</p>
+                <p className="sidebar-empty-text">No server playlists</p>
               ) : (
-                <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                <ul className="playlist-nav-list">
                   {guildPlaylists.map((p) => (
                     <li
                       key={p.id}
                       onClick={() => setSelectedPlaylist(p)}
-                      style={{
-                        padding: '0.5rem 0.75rem',
-                        borderRadius: '6px',
-                        cursor: 'pointer',
-                        background: selectedPlaylist?.id === p.id ? 'var(--accent-glow)' : 'transparent',
-                        color: selectedPlaylist?.id === p.id ? 'var(--accent)' : 'var(--text-primary)',
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        fontSize: '0.9rem',
-                        fontWeight: selectedPlaylist?.id === p.id ? 600 : 400,
-                      }}
+                      className={`playlist-nav-item ${selectedPlaylist?.id === p.id ? 'active' : ''}`}
                     >
-                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</span>
-                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{p.trackCount}</span>
+                      <span className="nav-item-name" title={p.name}>{p.name}</span>
+                      <span className="nav-item-count">{p.trackCount}</span>
                     </li>
                   ))}
                 </ul>
@@ -549,66 +524,61 @@ export function PlaylistSection() {
           </div>
 
           {/* Right Column: Selected Playlist Details & Tracks */}
-          <div>
+          <div className="playlist-main-content">
             {selectedPlaylist ? (
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem' }}>
-                  <div>
-                    <h3 style={{ fontSize: '1.25rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+              <div className="playlist-details-container">
+                <div className="playlist-top-details-bar">
+                  <div className="playlist-details-text">
+                    <h3 className="selected-playlist-name" title={selectedPlaylist.name}>
                       {selectedPlaylist.name}
                     </h3>
-                    <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.25rem' }}>
-                      <span className="badge" style={{ fontSize: '0.7rem', padding: '0.15rem 0.4rem', background: 'rgba(124, 92, 252, 0.2)', color: '#c084fc' }}>
+                    <div className="playlist-meta-badges">
+                      <span className="badge visibility-badge">
                         {selectedPlaylist.visibility}
                       </span>
-                      <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                      <span className="playlist-track-count-text">
                         {playlistTracks.length} {playlistTracks.length === 1 ? 'track' : 'tracks'}
                       </span>
                     </div>
                     {selectedPlaylist.description && (
-                      <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.4rem' }}>
+                      <p className="selected-playlist-desc">
                         {selectedPlaylist.description}
                       </p>
                     )}
                   </div>
 
-                  <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                  <div className="playlist-header-action-buttons">
                     <button
-                      className="btn btn-secondary"
+                      className="playlist-action-btn"
                       onClick={handleToggleFavoritePlaylist}
-                      style={{ padding: '0.4rem 0.6rem', fontSize: '0.85rem' }}
                       title={selectedPlaylist.isFavorite ? 'Remove favorite' : 'Mark as favorite'}
                     >
                       {selectedPlaylist.isFavorite ? '❤️' : '🤍'}
                     </button>
                     <button
-                      className="btn btn-secondary"
+                      className="playlist-action-btn"
                       onClick={handleRenamePlaylist}
-                      style={{ padding: '0.4rem 0.6rem', fontSize: '0.85rem' }}
                       title="Rename playlist"
                     >
                       ✏️ Rename
                     </button>
                     <button
-                      className="btn btn-secondary"
+                      className="playlist-action-btn"
                       onClick={handleDuplicatePlaylist}
-                      style={{ padding: '0.4rem 0.6rem', fontSize: '0.85rem' }}
                       title="Duplicate playlist"
                     >
                       📋 Duplicate
                     </button>
                     <button
-                      className="btn btn-primary"
+                      className="playlist-action-btn play-primary"
                       onClick={() => handlePlayPlaylist(selectedPlaylist.id, selectedPlaylist.name)}
-                      style={{ padding: '0.4rem 0.8rem', fontSize: '0.85rem' }}
                       disabled={playlistTracks.length === 0}
                     >
                       ▶ Play in Server
                     </button>
                     <button
-                      className="btn btn-secondary"
+                      className="playlist-action-btn delete-btn"
                       onClick={() => handleDeletePlaylist(selectedPlaylist.id, selectedPlaylist.name)}
-                      style={{ padding: '0.4rem 0.8rem', fontSize: '0.85rem', color: 'var(--error)' }}
                     >
                       🗑 Delete
                     </button>
@@ -616,28 +586,19 @@ export function PlaylistSection() {
                 </div>
 
                 {/* Add Track Form */}
-                <form onSubmit={handleAddTrack} style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
+                <form onSubmit={handleAddTrack} className="playlist-add-track-form">
                   <input
                     type="text"
                     placeholder="Add track by title, URL, or local file..."
                     value={addTrackInput}
                     onChange={(e) => setAddTrackInput(e.target.value)}
                     disabled={isAddingTrack}
-                    style={{
-                      flex: 1,
-                      padding: '0.45rem 0.75rem',
-                      background: '#12121a',
-                      border: '1px solid var(--border-color)',
-                      color: 'white',
-                      borderRadius: '6px',
-                      fontSize: '0.85rem',
-                    }}
+                    className="playlist-add-track-input"
                   />
                   <button
                     type="submit"
-                    className="btn btn-secondary"
+                    className="playlist-add-track-btn"
                     disabled={isAddingTrack || !addTrackInput.trim()}
-                    style={{ fontSize: '0.85rem', padding: '0.45rem 0.9rem' }}
                   >
                     {isAddingTrack ? 'Resolving...' : '+ Add'}
                   </button>
@@ -645,11 +606,11 @@ export function PlaylistSection() {
 
                 {/* Track List Table with Drag-and-Drop (Requirement 8) */}
                 {playlistTracks.length === 0 ? (
-                  <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', textAlign: 'center', padding: '2rem' }}>
+                  <div className="playlist-empty-state">
                     This playlist has no tracks yet. Add one above!
-                  </p>
+                  </div>
                 ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                  <div className="playlist-tracks-list">
                     {playlistTracks.map((pt, index) => (
                       <div
                         key={pt.id || `${pt.trackId}_${pt.position}`}
@@ -657,44 +618,35 @@ export function PlaylistSection() {
                         onDragStart={(e) => handleTrackDragStart(e, index)}
                         onDragOver={(e) => handleTrackDragOver(e, index)}
                         onDrop={(e) => handleTrackDrop(e, index)}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          padding: '0.5rem 0.75rem',
-                          background: draggedTrackIndex === index ? 'rgba(124, 92, 252, 0.15)' : 'rgba(255, 255, 255, 0.02)',
-                          borderRadius: '6px',
-                          border: dropTrackTargetIndex === index ? '1px dashed #a78bfa' : '1px solid var(--border-color)',
-                          fontSize: '0.85rem',
-                          cursor: 'grab',
-                        }}
+                        className={`playlist-track-row ${draggedTrackIndex === index ? 'dragging' : ''} ${dropTrackTargetIndex === index ? 'drop-target' : ''}`}
                       >
-                        <span style={{ cursor: 'grab', marginRight: '8px', color: 'var(--text-muted)' }} title="Drag to reorder">
+                        <span className="drag-handle" title="Drag to reorder">
                           ☰
                         </span>
-                        <span style={{ width: '28px', color: 'var(--text-muted)', fontWeight: 600 }}>
+                        <span className="playlist-track-pos">
                           #{pt.position}
                         </span>
 
-                        <div style={{ flex: 1, minWidth: 0, paddingRight: '0.5rem' }}>
-                          <div style={{ fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        <div className="playlist-track-info">
+                          <span className="playlist-track-title" title={pt.track?.title || 'Unknown Title'}>
                             {pt.track?.title || 'Unknown Title'}
-                          </div>
-                          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                          </span>
+                          <span className="playlist-track-meta">
                             {pt.track?.artist || 'Unknown Artist'}
                             {pt.track?.album ? ` • ${pt.track.album}` : ''}
-                          </div>
+                          </span>
                         </div>
 
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                          <span className="badge" style={{ fontSize: '0.7rem', padding: '0.1rem 0.35rem' }}>
+                        <div className="playlist-track-controls">
+                          <span className="source-badge provider-badge">
                             {pt.source?.provider || 'local'}
                           </span>
-                          <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem', minWidth: '40px', textAlign: 'right' }}>
+                          <span className="playlist-track-duration">
                             {formatDuration(pt.track?.duration)}
                           </span>
 
                           {/* Accessible Reorder Buttons */}
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                          <div className="playlist-reorder-arrows">
                             <button
                               type="button"
                               onClick={() => {
@@ -707,7 +659,7 @@ export function PlaylistSection() {
                                 }
                               }}
                               disabled={index === 0}
-                              style={{ background: 'none', border: 'none', color: index === 0 ? '#444' : 'var(--text-secondary)', cursor: index === 0 ? 'default' : 'pointer', fontSize: '0.65rem' }}
+                              className="arrow-btn"
                               title="Move track up"
                             >
                               ▲
@@ -724,7 +676,7 @@ export function PlaylistSection() {
                                 }
                               }}
                               disabled={index >= playlistTracks.length - 1}
-                              style={{ background: 'none', border: 'none', color: index >= playlistTracks.length - 1 ? '#444' : 'var(--text-secondary)', cursor: index >= playlistTracks.length - 1 ? 'default' : 'pointer', fontSize: '0.65rem' }}
+                              className="arrow-btn"
                               title="Move track down"
                             >
                               ▼
@@ -735,7 +687,7 @@ export function PlaylistSection() {
                           <button
                             type="button"
                             onClick={() => handleRemoveTrack(pt.position)}
-                            style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '0.85rem', padding: '0 0.25rem' }}
+                            className="remove-track-btn"
                             title="Remove from playlist"
                           >
                             ✕
@@ -747,7 +699,7 @@ export function PlaylistSection() {
                 )}
               </div>
             ) : (
-              <div style={{ textAlign: 'center', padding: '3rem 1rem', color: 'var(--text-muted)' }}>
+              <div className="playlist-empty-selection">
                 Select a playlist on the left or create a new one to view tracks.
               </div>
             )}
@@ -755,49 +707,36 @@ export function PlaylistSection() {
         </div>
       ) : (
         /* Recent History Tab */
-        <div style={{ marginTop: '1rem' }}>
+        <div className="recent-history-container">
           {recentTracks.length === 0 ? (
-            <p style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>
+            <div className="recent-empty-state">
               No playback history recorded yet. Play tracks in Discord or the dashboard!
-            </p>
+            </div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            <div className="recent-tracks-list">
               {recentTracks.map((r, idx) => (
                 <div
                   key={`${r.trackId}_${r.lastPlayedAt}`}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    padding: '0.6rem 0.9rem',
-                    background: 'rgba(255, 255, 255, 0.02)',
-                    borderRadius: '6px',
-                    border: '1px solid var(--border-color)',
-                  }}
+                  className="recent-history-row"
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                    <span style={{ color: 'var(--text-muted)', fontWeight: 600, width: '20px' }}>
+                  <div className="recent-left">
+                    <span className="recent-num">
                       {idx + 1}.
                     </span>
-                    <div>
-                      <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{r.title}</div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                    <div className="recent-text">
+                      <span className="recent-title" title={r.title}>{r.title}</span>
+                      <span className="recent-sub">
                         {r.artist || 'Unknown Artist'} • {new Date(r.lastPlayedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </div>
+                      </span>
                     </div>
                   </div>
 
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                  <div className="recent-right">
+                    <span className="recent-duration">
                       Listened: {formatDuration(r.durationListened)}
                     </span>
                     <span
-                      className="badge"
-                      style={{
-                        fontSize: '0.7rem',
-                        background: r.endReason === 'finished' ? 'rgba(34, 197, 94, 0.2)' : 'rgba(245, 158, 11, 0.2)',
-                        color: r.endReason === 'finished' ? '#4ade80' : '#fcd34d',
-                      }}
+                      className={`badge end-reason-badge ${r.endReason === 'finished' ? 'finished' : 'skipped'}`}
                     >
                       {r.endReason || 'finished'}
                     </span>
