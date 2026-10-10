@@ -29,7 +29,7 @@ import {
   createLogger,
 } from '@gakki/core';
 import { probeAudioMetadata } from '../audio/ffmpeg';
-import { spawnControlPanel, refreshPanel } from './control-panel';
+import { spawnControlPanel, spawnControlPanelInChannel, refreshPanel } from './control-panel';
 import { listLocalAudioFiles, listLocalFolders } from '../audio/local-files';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -71,8 +71,16 @@ export const slashCommandDefinitions = [
     .setDescription('Join your current voice channel and show QuickPlay menu'),
 
   new SlashCommandBuilder()
+    .setName('summon')
+    .setDescription('Summon Gakki to your current voice channel and show QuickPlay menu'),
+
+  new SlashCommandBuilder()
     .setName('menu')
     .setDescription('Open the interactive QuickPlay music menu (previous playlists, songs, genres, most played)'),
+
+  new SlashCommandBuilder()
+    .setName('panel')
+    .setDescription('Open the interactive player control panel (volume, filters, playback controls)'),
 
   new SlashCommandBuilder()
     .setName('play')
@@ -819,6 +827,7 @@ export async function handleChatInputCommand(
       break;
     }
 
+    case 'summon':
     case 'join': {
       if (!userVoiceChannel) {
         await interaction.reply({
@@ -847,11 +856,13 @@ export async function handleChatInputCommand(
       await interaction.deferReply();
       try {
         await playbackManager.join(guildId, userVoiceChannel.id);
+        const userId = member?.user?.id || member?.id || interaction.user.id;
         const { embeds, components } = await buildQuickPlayMenu(guildId, {
           analyticsManager,
           playlistManager,
           trackManager,
           recManager,
+          userId,
         });
         await interaction.editReply({
           content: `✅ Joined voice channel **${userVoiceChannel.name}**! Here are your quick playback options:`,
@@ -872,15 +883,28 @@ export async function handleChatInputCommand(
     case 'menu': {
       await interaction.deferReply();
       try {
+        const userId = member?.user?.id || member?.id || interaction.user.id;
         const { embeds, components } = await buildQuickPlayMenu(guildId, {
           analyticsManager,
           playlistManager,
           trackManager,
           recManager,
+          userId,
         });
         await interaction.editReply({ embeds, components });
       } catch (err: any) {
         await interaction.editReply(`Failed to open QuickPlay menu: ${err.message}`);
+      }
+      break;
+    }
+
+    case 'panel': {
+      await interaction.deferReply();
+      try {
+        await spawnControlPanelInChannel(interaction.channel, guildId, playbackManager);
+        await interaction.editReply('🎛️ Player Control Panel opened above.');
+      } catch (err: any) {
+        await interaction.editReply(`Failed to open Control Panel: ${err.message}`);
       }
       break;
     }

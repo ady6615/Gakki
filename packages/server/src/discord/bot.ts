@@ -25,7 +25,7 @@ import {
   spawnControlPanelInChannel,
   refreshPanel,
 } from './control-panel';
-import { handleQuickPlayInteraction } from './quickplay-menu';
+import { handleQuickPlayInteraction, buildQuickPlayMenu } from './quickplay-menu';
 import type { VoiceReceiverManager } from '../voice';
 import { resolveAnyAudioInput } from '../audio/track-resolver';
 import { createConfiguredAudioSourceManager } from '../sources';
@@ -316,16 +316,34 @@ export async function createDiscordBot(
     }
   });
 
-  // Listen for text triggers: bot mention (@Gakki), !panel, !gakki
+  // Listen for text triggers: bot mention (@Gakki), !panel, !gakki, !menu
   client.on('messageCreate', async (message) => {
     if (!activeManager || message.author.bot || !message.guildId) return;
 
     const botId = client?.user?.id;
     const isMentioned = botId && message.mentions.users.has(botId);
     const content = message.content.trim().toLowerCase();
-    const isTriggerWord = content === '!panel' || content === '!gakki' || content === '!control' || content === '!player';
+    const isMenuTrigger = isMentioned || content === '!gakki' || content === '!menu' || content === '!quickplay';
+    const isPanelTrigger = content === '!panel' || content === '!control' || content === '!player';
 
-    if (isMentioned || isTriggerWord) {
+    if (isMenuTrigger) {
+      try {
+        const { embeds, components } = await buildQuickPlayMenu(message.guildId, {
+          analyticsManager,
+          playlistManager,
+          trackManager,
+          recManager,
+          userId: message.author.id,
+        });
+        await message.channel.send({
+          content: `👋 Calling Gakki MusicBot! Here are your quick playback & playlist options:`,
+          embeds,
+          components,
+        });
+      } catch (err) {
+        logger.error({ err, guildId: message.guildId }, 'Failed to send quickplay menu on chat trigger');
+      }
+    } else if (isPanelTrigger) {
       try {
         await spawnControlPanelInChannel(message.channel, message.guildId, activeManager);
       } catch (err) {

@@ -241,6 +241,49 @@ async function runTests() {
 
   assert(repliedTitle.includes('Most Played'), 'QuickPlay button interaction starts Most Played playlist playback');
 
+  // Verify that an empty guild without any playlists STILL retains the "select_playlist" dropdown
+  const emptyMenu = await buildQuickPlayMenu('brand_new_empty_guild', {
+    analyticsManager,
+    playlistManager,
+    trackManager,
+  });
+  assert(
+    emptyMenu.components.some((row: any) =>
+      row.components.some((c: any) => c.data.custom_id === 'gakki:qp:select_playlist'),
+    ),
+    'Empty guild menu STILL includes the "Select a Previous Playlist to Play" select menu',
+  );
+  const selectComp: any = emptyMenu.components[1]?.components[0];
+  assert(
+    selectComp.data.placeholder?.includes('Select a Previous Playlist to Play'),
+    'Empty guild select menu retains the placeholder "Select a Previous Playlist to Play..."',
+  );
+
+  // Test selecting dynamic mix from dropdown
+  let dropdownRepliedTitle = '';
+  const mockDropdownInteraction: any = {
+    guildId: menuGuildId,
+    customId: 'gakki:qp:select_playlist',
+    values: ['auto:most_played'],
+    isButton: () => false,
+    isStringSelectMenu: () => true,
+    deferReply: async () => {},
+    editReply: async (msg: any) => {
+      dropdownRepliedTitle = msg.embeds?.[0]?.data?.title || msg.content || '';
+    },
+    member: { displayName: 'Tester', voice: { channel: { id: 'vc_123' } } },
+    user: { id: 'u_123', username: 'Tester' },
+    client: { guilds: { fetch: async () => null } },
+  };
+
+  await handleQuickPlayInteraction(mockDropdownInteraction, {
+    playbackManager,
+    analyticsManager,
+    playlistManager,
+    trackManager,
+  });
+  assert(dropdownRepliedTitle.includes('Most Played'), 'Dropdown selection "auto:most_played" triggers Most Played playback');
+
   console.log('\n================================================================');
   console.log('✅ ALL SMART HISTORY, MOST PLAYED & QUICKPLAY TESTS PASSED!');
   console.log('================================================================\n');

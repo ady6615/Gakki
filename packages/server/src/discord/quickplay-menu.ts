@@ -49,6 +49,7 @@ export async function buildQuickPlayMenu(
     playlistManager?: PlaylistManager;
     trackManager?: TrackManager;
     recManager?: AiRecommendationManager;
+    userId?: string;
   } = {},
 ): Promise<{ embeds: EmbedBuilder[]; components: ActionRowBuilder<any>[] }> {
   const { analyticsManager, playlistManager, trackManager } = options;
@@ -82,10 +83,17 @@ export async function buildQuickPlayMenu(
     }
   }
 
-  // 2. Fetch Playlists
+  // 2. Fetch Playlists (including auto-syncing most played)
   if (playlistManager) {
     try {
-      const { userPlaylists, guildPlaylists } = await playlistManager.listPlaylists({ guildId });
+      if (analyticsManager) {
+        await playlistManager.syncMostPlayedPlaylist(guildId, analyticsManager, 25).catch(() => {});
+      }
+
+      const { userPlaylists, guildPlaylists } = await playlistManager.listPlaylists({
+        guildId,
+        userId: options.userId,
+      });
       const combined = [...guildPlaylists, ...userPlaylists];
       const seen = new Set<string>();
       for (const p of combined) {
@@ -173,9 +181,12 @@ export async function buildQuickPlayMenu(
   );
   components.push(buttonRow);
 
-  // Row 2: Playlist Selection Dropdown (if playlists exist)
-  if (playlistsList.length > 0) {
-    const playlistOptions = playlistsList.slice(0, 25).map((p) =>
+  // Row 2: Playlist Selection Dropdown (ALWAYS rendered so it is never missing)
+  const playlistOptions: StringSelectMenuOptionBuilder[] = [];
+
+  // 1. Add saved server, user, and imported playlists (up to 20)
+  for (const p of playlistsList.slice(0, 20)) {
+    playlistOptions.push(
       new StringSelectMenuOptionBuilder()
         .setLabel(p.name.slice(0, 100))
         .setValue(`pl:${p.id}`)
@@ -184,14 +195,55 @@ export async function buildQuickPlayMenu(
         )
         .setEmoji('📜'),
     );
-
-    const playlistSelect = new StringSelectMenuBuilder()
-      .setCustomId('gakki:qp:select_playlist')
-      .setPlaceholder('📜 Select a Previous Playlist to Play...')
-      .addOptions(playlistOptions);
-
-    components.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(playlistSelect));
   }
+
+  // 2. Add dynamic smart mix & history playlist options so the dropdown is never empty
+  if (playlistOptions.length < 25 && !playlistsList.some((p) => p.name.includes('Most Played'))) {
+    playlistOptions.push(
+      new StringSelectMenuOptionBuilder()
+        .setLabel('🔥 Server Most Played Mix')
+        .setValue('auto:most_played')
+        .setDescription('Stream the top played songs on this server')
+        .setEmoji('🔥'),
+    );
+  }
+
+  if (playlistOptions.length < 25 && !playlistsList.some((p) => p.name.includes('Recent'))) {
+    playlistOptions.push(
+      new StringSelectMenuOptionBuilder()
+        .setLabel('⏪ Recent Songs History')
+        .setValue('auto:recent')
+        .setDescription('Replay songs recently listened to on this server')
+        .setEmoji('⏪'),
+    );
+  }
+
+  if (playlistOptions.length < 25) {
+    playlistOptions.push(
+      new StringSelectMenuOptionBuilder()
+        .setLabel('🎲 Smart Vibe Mix')
+        .setValue('auto:smart')
+        .setDescription('Algorithmic recommendation mix generated from library')
+        .setEmoji('🎲'),
+    );
+  }
+
+  if (distinctGenres.length > 0 && playlistOptions.length < 25) {
+    playlistOptions.push(
+      new StringSelectMenuOptionBuilder()
+        .setLabel(`🎧 ${topGenre} Genre Mix`)
+        .setValue('auto:genre')
+        .setDescription(`Stream tracks from the popular ${topGenre} genre`)
+        .setEmoji('🎧'),
+    );
+  }
+
+  const playlistSelect = new StringSelectMenuBuilder()
+    .setCustomId('gakki:qp:select_playlist')
+    .setPlaceholder('📜 Select a Previous Playlist to Play...')
+    .addOptions(playlistOptions);
+
+  components.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(playlistSelect));
 
   // Row 3: Genre Mix Dropdown (if genres exist)
   if (distinctGenres.length > 0) {
@@ -210,7 +262,6 @@ export async function buildQuickPlayMenu(
 
     components.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(genreSelect));
   }
-
   return { embeds: [embed], components };
 }
 
@@ -566,6 +617,272 @@ export async function handleQuickPlayInteraction(
     // ── 6. Select Playlist Dropdown ────────────────────────────────────
     if (interaction.isStringSelectMenu() && customId === 'gakki:qp:select_playlist') {
       const selectedValue = interaction.values[0];
+
+      // Handle auto history/mix options
+      if (selectedValue === 'auto:most_played') {
+        let tracksToPlay: Array<{
+          title: string;
+          artist?: string | null;
+          album?: string | null;
+          duration?: number | null;
+          sourceUrl?: string | null;
+          provider?: string | null;
+        }> = [];
+
+        if (playlistManager && analyticsManager) {
+          const mostPlayedPl = await playlistManager.syncMostPlayedPlaylist(guildId, analyticsManager, 25);
+          const plDetails = await playlistManager.getPlaylist(mostPlayedPl.id);
+          if (plDetails && plDetails.tracks.length > 0) {
+            tracksToPlay = plDetails.tracks
+              .filter((pt) => !!pt.track || !!pt.source)
+              .map((pt) => ({
+                title: pt.track?.title || 'Unknown Track',
+                artist: pt.track?.artist ?? null,
+                album: pt.track?.album ?? null,
+                duration: pt.track?.duration ?? null,
+                sourceUrl: pt.source?.sourceUrl || (pt.track?.artist ? `${pt.track.artist} - ${pt.track.title}` : pt.track?.title) || 'Unknown',
+                provider: pt.source?.provider || 'youtube',
+              }));
+          }
+        }
+
+        if (tracksToPlay.length === 0 && analyticsManager) {
+          const stats = await analyticsManager.getDashboardStats({ guildId, timeRange: 'all' });
+          const top = stats.topTracks || stats.mostPlayedTracks || [];
+          tracksToPlay = await Promise.all(
+            top.map(async (t) => {
+              let srcUrl: string | null = null;
+              let provider = 'youtube';
+              if (trackManager && t.trackId) {
+                const src = await trackManager.getPrimarySourceByTrackId(t.trackId).catch(() => null);
+                if (src?.sourceUrl) {
+                  srcUrl = src.sourceUrl;
+                  provider = src.provider;
+                }
+              }
+              return {
+                title: t.title,
+                artist: t.artist,
+                album: null,
+                duration: t.duration,
+                sourceUrl: srcUrl || (t.artist ? `${t.artist} - ${t.title}` : t.title),
+                provider,
+              };
+            }),
+          );
+        }
+
+        if (tracksToPlay.length === 0) {
+          await interaction.editReply('ℹ️ No playback history found yet for this server. Play some songs first!');
+          return;
+        }
+
+        await playTrackList(guildId, tracksToPlay, playbackManager, userTag, interaction.user.id, audioSourceManager);
+
+        const embed = new EmbedBuilder()
+          .setTitle('🔥 Playing Most Played Playlist')
+          .setDescription(
+            `Loaded **${tracksToPlay.length}** most played tracks into the queue.\n` +
+            `▶️ **Now Playing:** **${tracksToPlay[0].title}**${tracksToPlay[0].artist ? ` by *${tracksToPlay[0].artist}*` : ''}`,
+          )
+          .setColor(0xe11d48)
+          .setFooter({ text: `Selected by ${userTag}` });
+
+        await interaction.editReply({ embeds: [embed] });
+        await refreshPanel(guildId, playbackManager).catch(() => {});
+        return;
+      }
+
+      if (selectedValue === 'auto:recent') {
+        let recentTracks: Array<{
+          title: string;
+          artist?: string | null;
+          duration?: number | null;
+          sourceUrl?: string | null;
+          provider?: string | null;
+        }> = [];
+
+        if (analyticsManager) {
+          const recent = await analyticsManager.getRecentTracks(guildId, 15);
+          if (recent.length > 0) {
+            recentTracks = await Promise.all(
+              recent.map(async (r) => {
+                let srcUrl: string | null = null;
+                let provider = 'youtube';
+                if (trackManager && r.trackId) {
+                  const src = await trackManager.getPrimarySourceByTrackId(r.trackId).catch(() => null);
+                  if (src?.sourceUrl) {
+                    srcUrl = src.sourceUrl;
+                    provider = src.provider;
+                  }
+                }
+                return {
+                  title: r.title,
+                  artist: r.artist,
+                  duration: null,
+                  sourceUrl: srcUrl || (r.artist ? `${r.artist} - ${r.title}` : r.title),
+                  provider,
+                };
+              }),
+            );
+          }
+        }
+
+        if (recentTracks.length === 0 && trackManager) {
+          const libraryRecent = await trackManager.getRecentTracks(15);
+          recentTracks = libraryRecent.map((t) => ({
+            title: t.title,
+            artist: t.artist,
+            duration: t.duration,
+            sourceUrl: t.source?.sourceUrl || (t.artist ? `${t.artist} - ${t.title}` : t.title),
+            provider: t.source?.provider || 'local',
+          }));
+        }
+
+        if (recentTracks.length === 0) {
+          await interaction.editReply('ℹ️ No recently played tracks recorded for this server yet.');
+          return;
+        }
+
+        await playTrackList(guildId, recentTracks, playbackManager, userTag, interaction.user.id, audioSourceManager);
+
+        const embed = new EmbedBuilder()
+          .setTitle('⏪ Playing Recent Songs')
+          .setDescription(
+            `Enqueued **${recentTracks.length}** recently played tracks.\n` +
+            `▶️ **Now Playing:** **${recentTracks[0].title}**${recentTracks[0].artist ? ` by *${recentTracks[0].artist}*` : ''}`,
+          )
+          .setColor(0x3b82f6)
+          .setFooter({ text: `Selected by ${userTag}` });
+
+        await interaction.editReply({ embeds: [embed] });
+        await refreshPanel(guildId, playbackManager).catch(() => {});
+        return;
+      }
+
+      if (selectedValue === 'auto:smart') {
+        let vibeTracks: Array<{
+          title: string;
+          artist?: string | null;
+          duration?: number | null;
+          sourceUrl?: string | null;
+          provider?: string | null;
+        }> = [];
+
+        if (recManager) {
+          try {
+            let seedTrackId: string | undefined;
+            if (analyticsManager) {
+              const recent = await analyticsManager.getRecentTracks(guildId, 1);
+              if (recent.length > 0) {
+                seedTrackId = recent[0].trackId;
+              }
+            }
+            if (!seedTrackId && trackManager) {
+              const all = await trackManager.getAllTracks(1);
+              if (all.length > 0) {
+                seedTrackId = all[0].id;
+              }
+            }
+
+            if (seedTrackId) {
+              const recResult = await recManager.generateVibePlaylist(seedTrackId, guildId, 15, 'BALANCED');
+              vibeTracks = recResult.tracks.map((r: any) => ({
+                title: r.title || r.name,
+                artist: r.artist ?? null,
+                duration: r.duration ?? null,
+                sourceUrl: r.path || r.sourceUrl || (r.artist ? `${r.artist} - ${r.title || r.name}` : r.title || r.name),
+                provider: r.sourceProvider || 'youtube',
+              }));
+            }
+          } catch {
+            // ignore
+          }
+        }
+
+        if (vibeTracks.length === 0 && trackManager) {
+          const all = await trackManager.getAllTracks(25);
+          const shuffled = [...all].sort(() => Math.random() - 0.5).slice(0, 15);
+          vibeTracks = await Promise.all(
+            shuffled.map(async (t) => {
+              let srcUrl: string | null = null;
+              let provider = 'local';
+              const src = await trackManager.getPrimarySourceByTrackId(t.id).catch(() => null);
+              if (src?.sourceUrl) {
+                srcUrl = src.sourceUrl;
+                provider = src.provider;
+              }
+              return {
+                title: t.title,
+                artist: t.artist,
+                duration: t.duration,
+                sourceUrl: srcUrl || (t.artist ? `${t.artist} - ${t.title}` : t.title),
+                provider,
+              };
+            }),
+          );
+        }
+
+        if (vibeTracks.length === 0) {
+          await interaction.editReply('ℹ️ Not enough music data to construct a smart vibe mix yet.');
+          return;
+        }
+
+        await playTrackList(guildId, vibeTracks, playbackManager, userTag, interaction.user.id, audioSourceManager);
+
+        const embed = new EmbedBuilder()
+          .setTitle('🎲 Playing Smart Vibe Mix')
+          .setDescription(
+            `Generated **${vibeTracks.length}** personalized tracks.\n` +
+            `▶️ **Now Playing:** **${vibeTracks[0].title}**${vibeTracks[0].artist ? ` by *${vibeTracks[0].artist}*` : ''}`,
+          )
+          .setColor(0x10b981)
+          .setFooter({ text: `Selected by ${userTag}` });
+
+        await interaction.editReply({ embeds: [embed] });
+        await refreshPanel(guildId, playbackManager).catch(() => {});
+        return;
+      }
+
+      if (selectedValue === 'auto:genre') {
+        let targetGenre = 'Pop';
+        if (trackManager) {
+          const distinct = await trackManager.getDistinctGenres().catch(() => []);
+          if (distinct.length > 0) {
+            targetGenre = distinct[0].genre;
+          }
+        }
+        const fetched = trackManager ? await trackManager.getTracksByGenre(targetGenre, 20).catch(() => []) : [];
+        if (fetched.length === 0) {
+          await interaction.editReply(`ℹ️ No tracks found for genre **${targetGenre}**.`);
+          return;
+        }
+
+        const genreTracks = fetched.map((t) => ({
+          title: t.title,
+          artist: t.artist,
+          album: t.album,
+          duration: t.duration,
+          sourceUrl: t.source?.sourceUrl || (t.artist ? `${t.artist} - ${t.title}` : t.title),
+          provider: t.source?.provider || 'local',
+        }));
+
+        await playTrackList(guildId, genreTracks, playbackManager, userTag, interaction.user.id, audioSourceManager);
+
+        const embed = new EmbedBuilder()
+          .setTitle(`🎧 Playing ${targetGenre} Genre Mix`)
+          .setDescription(
+            `Enqueued **${genreTracks.length}** tracks matching **${targetGenre}**.\n` +
+            `▶️ **Now Playing:** **${genreTracks[0].title}**${genreTracks[0].artist ? ` by *${genreTracks[0].artist}*` : ''}`,
+          )
+          .setColor(0x8b5cf6)
+          .setFooter({ text: `Selected by ${userTag}` });
+
+        await interaction.editReply({ embeds: [embed] });
+        await refreshPanel(guildId, playbackManager).catch(() => {});
+        return;
+      }
+
       const playlistId = selectedValue.replace('pl:', '');
 
       if (!playlistManager) {
