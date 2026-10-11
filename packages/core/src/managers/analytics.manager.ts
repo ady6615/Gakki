@@ -80,6 +80,23 @@ export interface GuildAnalytics {
   }>;
 }
 
+export interface YesterdayTracksOptions {
+  guildId: string;
+  userId?: string;
+  referenceDate?: Date;
+  limit?: number;
+}
+
+export interface YesterdayTrackItem {
+  trackId: string;
+  title: string;
+  artist: string | null;
+  playedAt: Date;
+  duration?: number | null;
+  sourceUrl?: string | null;
+  provider?: string | null;
+}
+
 import { TrackManager } from './track.manager';
 
 /**
@@ -1009,6 +1026,142 @@ export class AnalyticsManager {
     } catch (err) {
       this.logger.error({ err, retentionDays }, 'Failed to clean old history');
       return 0;
+    }
+  }
+
+  /**
+   * Fetch distinct tracks played yesterday by user or server.
+   * "Yesterday" is evaluated against both UTC and Local calendar days relative to referenceDate.
+   */
+  async getTracksPlayedYesterday(options: YesterdayTracksOptions): Promise<YesterdayTrackItem[]> {
+    const refDate = options.referenceDate ? new Date(options.referenceDate) : new Date();
+
+    // UTC day boundaries
+    const startOfTodayUtc = new Date(
+      Date.UTC(refDate.getUTCFullYear(), refDate.getUTCMonth(), refDate.getUTCDate(), 0, 0, 0, 0),
+    );
+    const startOfYesterdayUtc = new Date(startOfTodayUtc.getTime() - 24 * 60 * 60 * 1000);
+    const endOfYesterdayUtc = startOfTodayUtc;
+
+    // Local day boundaries
+    const startOfTodayLocal = new Date(refDate.getFullYear(), refDate.getMonth(), refDate.getDate(), 0, 0, 0, 0);
+    const startOfYesterdayLocal = new Date(startOfTodayLocal.getTime() - 24 * 60 * 60 * 1000);
+    const endOfYesterdayLocal = startOfTodayLocal;
+
+    const limit = Math.min(100, Math.max(1, options.limit ?? 25));
+
+    if (!this.db) {
+      let events = Array.from(this.inMemoryEvents.values()).filter((e) => {
+        if (e.guildId !== options.guildId) return false;
+        const t = e.startedAt instanceof Date ? e.startedAt.getTime() : new Date(e.startedAt).getTime();
+        const inUtcYesterday = t >= startOfYesterdayUtc.getTime() && t < endOfYesterdayUtc.getTime();
+        const inLocalYesterday = t >= startOfYesterdayLocal.getTime() && t < endOfYesterdayLocal.getTime();
+        return (
+          (inUtcYesterday && t < startOfTodayUtc.getTime()) ||
+          (inLocalYesterday && t < startOfTodayLocal.getTime())
+        );
+      });
+
+      if (options.userId) {
+        const userEvents = events.filter((e) => e.userId === options.userId);
+        if (userEvents.length > 0) {
+          events = userEvents;
+        }
+      }
+
+      // Sort by startedAt descending
+      events.sort((a, b) => {
+        const tA = a.startedAt instanceof Date ? a.startedAt.getTime() : new Date(a.startedAt).getTime();
+        const tB = b.startedAt instanceof Date ? b.startedAt.getTime() : new Date(b.startedAt).getTime();
+        return tB - tA;
+      });
+
+      const seen = new Set<string>();
+      const results: YesterdayTrackItem[] = [];
+      for (const e of events) {
+        if (!seen.has(e.trackId)) {
+          seen.add(e.trackId);
+          results.push({
+            trackId: e.trackId,
+            title: e.trackTitle || ('Track ' + e.trackId),
+            artist: e.artist ?? null,
+            playedAt: e.startedAt instanceof Date ? e.startedAt : new Date(e.startedAt),
+            duration: e.trackDuration ?? null,
+            sourceUrl: e.source ?? null,
+            provider: 'youtube',
+          });
+          if (results.length >= limit) break;
+        }
+      }
+      return results;
+    }
+
+    try {
+      let userCondition = sql``;
+      if (options.userId) {
+        const userCountRes = await this.db.execute<{ count: number }>(sql`
+          SELECT count(*)::int AS count
+          FROM playback_events
+          WHERE guild_id = ${options.guildId}
+            AND user_id = ${options.userId}
+            AND (
+              (started_at >= ${startOfYesterdayUtc} AND started_at < ${endOfYesterdayUtc})
+              OR (started_at >= ${startOfYesterdayLocal} AND started_at < ${endOfYesterdayLocal})
+            )
+            AND started_at < ${startOfTodayUtc}
+        `);
+        if ((userCountRes.rows[0]?.count ?? 0) > 0) {
+          userCondition = sql`AND pe.user_id = ${options.userId}`;
+        }
+      }
+
+      const results = await this.db.execute<{
+        track_id: string;
+        title: string;
+        artist: string | null;
+        duration: number | null;
+        started_at: Date;
+        source_url: string | null;
+        provider: string | null;
+      }>(sql`
+        SELECT DISTINCT ON (pe.track_id)
+          pe.track_id,
+          t.title,
+          t.artist,
+          t.duration,
+          pe.started_at,
+          ts.source_url,
+          ts.provider
+        FROM playback_events pe
+        JOIN tracks t ON pe.track_id = t.id
+        LEFT JOIN track_sources ts ON ts.track_id = t.id
+        WHERE pe.guild_id = ${options.guildId}
+          AND (
+            (pe.started_at >= ${startOfYesterdayUtc} AND pe.started_at < ${endOfYesterdayUtc})
+            OR (pe.started_at >= ${startOfYesterdayLocal} AND pe.started_at < ${endOfYesterdayLocal})
+          )
+          AND pe.started_at < ${startOfTodayUtc}
+          ${userCondition}
+        ORDER BY pe.track_id, pe.started_at DESC
+        LIMIT ${limit}
+      `);
+
+      const rows = results.rows.sort(
+        (a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime(),
+      );
+
+      return rows.map((r) => ({
+        trackId: r.track_id,
+        title: r.title,
+        artist: r.artist,
+        playedAt: new Date(r.started_at),
+        duration: r.duration,
+        sourceUrl: r.source_url,
+        provider: r.provider || 'youtube',
+      }));
+    } catch (err) {
+      this.logger.error({ err, guildId: options.guildId }, 'Failed to fetch yesterday tracks');
+      return [];
     }
   }
 }

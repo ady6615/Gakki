@@ -33,7 +33,7 @@ export { PlaylistManager } from './managers/playlist.manager';
 export { PlaybackManager } from './managers/playback.manager';
 export { AudioPlayerManager } from './managers/audio-player.manager';
 export { AudioSourceManager } from './managers/audio-source.manager';
-export { AnalyticsManager } from './managers/analytics.manager';
+export { AnalyticsManager, type YesterdayTracksOptions, type YesterdayTrackItem } from './managers/analytics.manager';
 export { AiRecommendationManager } from './managers/ai-recommendation.manager';
 export { AudioFeatureManager } from './managers/audio-feature.manager';
 export { TrackSimilarityService, DEFAULT_REC_PROFILES } from './managers/track-similarity.service';

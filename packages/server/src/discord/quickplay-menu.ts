@@ -35,6 +35,7 @@ export interface QuickPlayContext {
   playlistManager?: PlaylistManager;
   trackManager?: TrackManager;
   recManager?: AiRecommendationManager;
+  referenceDate?: Date;
 }
 
 /**
@@ -50,6 +51,7 @@ export async function buildQuickPlayMenu(
     trackManager?: TrackManager;
     recManager?: AiRecommendationManager;
     userId?: string;
+    referenceDate?: Date;
   } = {},
 ): Promise<{ embeds: EmbedBuilder[]; components: ActionRowBuilder<any>[] }> {
   const { analyticsManager, playlistManager, trackManager } = options;
@@ -83,11 +85,22 @@ export async function buildQuickPlayMenu(
     }
   }
 
-  // 2. Fetch Playlists (including auto-syncing most played)
+  // 2. Fetch Playlists (including auto-syncing most played & yesterday's playlist)
+  let yesterdayPl: any = null;
+  let yesterdayTracksCount = 0;
   if (playlistManager) {
     try {
       if (analyticsManager) {
         await playlistManager.syncMostPlayedPlaylist(guildId, analyticsManager, 25).catch(() => {});
+        yesterdayPl = await playlistManager
+          .syncYesterdayPlaylist(guildId, analyticsManager, {
+            userId: options.userId,
+            referenceDate: options.referenceDate,
+          })
+          .catch(() => null);
+        if (yesterdayPl) {
+          yesterdayTracksCount = yesterdayPl.trackCount;
+        }
       }
 
       const { userPlaylists, guildPlaylists } = await playlistManager.listPlaylists({
@@ -102,6 +115,20 @@ export async function buildQuickPlayMenu(
           playlistsList.push(p);
         }
       }
+    } catch {
+      // ignore
+    }
+  }
+
+  if (!yesterdayPl && analyticsManager) {
+    try {
+      const yTracks = await analyticsManager.getTracksPlayedYesterday({
+        guildId,
+        userId: options.userId,
+        referenceDate: options.referenceDate,
+        limit: 10,
+      });
+      yesterdayTracksCount = yTracks.length;
     } catch {
       // ignore
     }
@@ -142,11 +169,20 @@ export async function buildQuickPlayMenu(
         value: `**${topGenre}** (${distinctGenres[0]?.count || 0} tracks)`,
         inline: true,
       },
-    )
-    .setFooter({
-      text: 'Gakki Music Platform • Zero-latency streaming & intelligent history',
-    })
-    .setTimestamp();
+    );
+
+  if (yesterdayTracksCount > 0) {
+    embed.addFields({
+      name: "📅 Yesterday's Songs",
+      value: `**${yesterdayTracksCount} track(s)** from yesterday available for instant replay! (Auto-expires in 2-3 days)`,
+      inline: false,
+    });
+  }
+
+  embed.setFooter({
+    text: 'Gakki Music Platform • Zero-latency streaming & intelligent history',
+  })
+  .setTimestamp();
 
   // ── Build Action Rows ───────────────────────────────────────────
   const components: ActionRowBuilder<any>[] = [];
@@ -183,6 +219,19 @@ export async function buildQuickPlayMenu(
 
   // Row 2: Playlist Selection Dropdown (ALWAYS rendered so it is never missing)
   const playlistOptions: StringSelectMenuOptionBuilder[] = [];
+
+  // 0. Dedicated Yesterday's Replay Option
+  playlistOptions.push(
+    new StringSelectMenuOptionBuilder()
+      .setLabel('📅 Play the songs I played yesterday')
+      .setValue(yesterdayPl ? `pl:${yesterdayPl.id}` : 'auto:yesterday')
+      .setDescription(
+        yesterdayTracksCount > 0
+          ? `${yesterdayTracksCount} track(s) from yesterday (Expires in 2-3 days)`
+          : 'Replay songs played yesterday (Expires in 2-3 days)',
+      )
+      .setEmoji('📅'),
+  );
 
   // 1. Add saved server, user, and imported playlists (up to 20)
   for (const p of playlistsList.slice(0, 20)) {
@@ -245,6 +294,16 @@ export async function buildQuickPlayMenu(
 
   components.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(playlistSelect));
 
+  // Row 3: Dedicated "Play the songs I played yesterday" button
+  const yesterdayButtonRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId('gakki:qp:yesterday')
+      .setLabel('Play the songs I played yesterday')
+      .setEmoji('📅')
+      .setStyle(ButtonStyle.Success),
+  );
+  components.push(yesterdayButtonRow);
+
   // Row 3: Genre Mix Dropdown (if genres exist)
   if (distinctGenres.length > 0) {
     const genreOptions = distinctGenres.slice(0, 25).map((g) =>
@@ -301,6 +360,129 @@ async function ensureVoiceConnected(
 }
 
 /**
+ * Plays tracks from yesterday's history or generated yesterday playlist.
+ */
+async function playYesterdayTracks(
+  guildId: string,
+  userId: string,
+  userTag: string,
+  interaction: ButtonInteraction | StringSelectMenuInteraction,
+  context: QuickPlayContext,
+): Promise<void> {
+  const { playbackManager, analyticsManager, playlistManager, trackManager, audioSourceManager, referenceDate } = context;
+
+  let tracksToPlay: Array<{
+    title: string;
+    artist?: string | null;
+    album?: string | null;
+    duration?: number | null;
+    sourceUrl?: string | null;
+    provider?: string | null;
+  }> = [];
+
+  // 1. Check if an existing yesterday playlist is available for replay
+  if (playlistManager) {
+    try {
+      const { userPlaylists, guildPlaylists } = await playlistManager.listPlaylists({ guildId, userId });
+      const existingYesterdayPl = [...userPlaylists, ...guildPlaylists].find(
+        (p) => p.name.includes("Yesterday's Songs") || (p.description && p.description.includes('auto-yesterday')),
+      );
+      if (existingYesterdayPl) {
+        const plDetails = await playlistManager.getPlaylist(existingYesterdayPl.id);
+        if (plDetails && plDetails.tracks.length > 0) {
+          tracksToPlay = plDetails.tracks
+            .filter((pt) => !!pt.track || !!pt.source)
+            .map((pt) => ({
+              title: pt.track?.title || 'Unknown Track',
+              artist: pt.track?.artist ?? null,
+              album: pt.track?.album ?? null,
+              duration: pt.track?.duration ?? null,
+              sourceUrl: pt.source?.sourceUrl || (pt.track?.artist ? `${pt.track.artist} - ${pt.track.title}` : pt.track?.title) || 'Unknown',
+              provider: pt.source?.provider || 'youtube',
+            }));
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    if (tracksToPlay.length === 0 && analyticsManager) {
+      const yesterdayPl = await playlistManager.syncYesterdayPlaylist(guildId, analyticsManager, {
+        userId,
+        referenceDate,
+      });
+      if (yesterdayPl) {
+        const plDetails = await playlistManager.getPlaylist(yesterdayPl.id);
+        if (plDetails && plDetails.tracks.length > 0) {
+          tracksToPlay = plDetails.tracks
+            .filter((pt) => !!pt.track || !!pt.source)
+            .map((pt) => ({
+              title: pt.track?.title || 'Unknown Track',
+              artist: pt.track?.artist ?? null,
+              album: pt.track?.album ?? null,
+              duration: pt.track?.duration ?? null,
+              sourceUrl: pt.source?.sourceUrl || (pt.track?.artist ? `${pt.track.artist} - ${pt.track.title}` : pt.track?.title) || 'Unknown',
+              provider: pt.source?.provider || 'youtube',
+            }));
+        }
+      }
+    }
+  }
+
+  if (tracksToPlay.length === 0 && analyticsManager) {
+    const yesterdayTracks = await analyticsManager.getTracksPlayedYesterday({
+      guildId,
+      userId,
+      referenceDate,
+      limit: 25,
+    });
+    if (yesterdayTracks.length > 0) {
+      tracksToPlay = await Promise.all(
+        yesterdayTracks.map(async (t) => {
+          let srcUrl: string | null = t.sourceUrl ?? null;
+          let provider = t.provider || 'youtube';
+          if (!srcUrl && trackManager && t.trackId) {
+            const src = await trackManager.getPrimarySourceByTrackId(t.trackId).catch(() => null);
+            if (src?.sourceUrl) {
+              srcUrl = src.sourceUrl;
+              provider = src.provider;
+            }
+          }
+          return {
+            title: t.title,
+            artist: t.artist,
+            album: null,
+            duration: t.duration ?? null,
+            sourceUrl: srcUrl || (t.artist ? `${t.artist} - ${t.title}` : t.title),
+            provider,
+          };
+        }),
+      );
+    }
+  }
+
+  if (tracksToPlay.length === 0) {
+    await interaction.editReply('ℹ️ No songs were recorded yesterday for you or this server. Play some music today and check back tomorrow!');
+    return;
+  }
+
+  await playTrackList(guildId, tracksToPlay, playbackManager, userTag, userId, audioSourceManager);
+
+  const embed = new EmbedBuilder()
+    .setTitle('📅 Playing Songs Played Yesterday')
+    .setDescription(
+      `Loaded **${tracksToPlay.length}** tracks from yesterday's history into the queue.\n` +
+      `▶️ **Now Playing:** **${tracksToPlay[0].title}**${tracksToPlay[0].artist ? ` by *${tracksToPlay[0].artist}*` : ''}\n\n` +
+      `*⏳ Auto-Cleanup: This temporary playlist will be automatically deleted after 2-3 days.*`,
+    )
+    .setColor(0x6366f1)
+    .setFooter({ text: `Triggered by ${userTag}` });
+
+  await interaction.editReply({ embeds: [embed] });
+  await refreshPanel(guildId, playbackManager).catch(() => {});
+}
+
+/**
  * Handles all QuickPlay button and select menu interactions (prefixed with `gakki:qp:`).
  */
 export async function handleQuickPlayInteraction(
@@ -332,6 +514,12 @@ export async function handleQuickPlayInteraction(
   if (!connected) return;
 
   try {
+    // ── Dedicated Yesterday's Songs Button ────────────────────────────
+    if (customId === 'gakki:qp:yesterday') {
+      await playYesterdayTracks(guildId, interaction.user.id, userTag, interaction, context);
+      return;
+    }
+
     // ── 2. Most Played Button ─────────────────────────────────────────
     if (customId === 'gakki:qp:most_played') {
       let tracksToPlay: Array<{
@@ -617,6 +805,12 @@ export async function handleQuickPlayInteraction(
     // ── 6. Select Playlist Dropdown ────────────────────────────────────
     if (interaction.isStringSelectMenu() && customId === 'gakki:qp:select_playlist') {
       const selectedValue = interaction.values[0];
+
+      // Handle yesterday replay option
+      if (selectedValue === 'auto:yesterday') {
+        await playYesterdayTracks(guildId, interaction.user.id, userTag, interaction, context);
+        return;
+      }
 
       // Handle auto history/mix options
       if (selectedValue === 'auto:most_played') {

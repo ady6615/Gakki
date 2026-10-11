@@ -145,6 +145,13 @@ export async function createDiscordBot(
     } catch (cmdErr) {
       logger.error({ err: cmdErr }, 'Failed to register global slash commands');
     }
+
+    if (playlistManager) {
+      playlistManager.cleanupExpiredPlaylists(2).catch(() => {});
+      setInterval(() => {
+        playlistManager.cleanupExpiredPlaylists(2).catch(() => {});
+      }, 12 * 60 * 60 * 1000).unref();
+    }
   });
 
   client.on('guildCreate', async (guild) => {

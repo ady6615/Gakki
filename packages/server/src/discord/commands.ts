@@ -46,7 +46,7 @@ import { SpotifyParser } from '../audio/spotify-parser';
 import { DownloaderService } from '../audio/downloader.service';
 import { YouTubeSourceProvider } from '../sources/youtube.provider';
 import type { VoiceReceiverManager } from '../voice/voice-receiver';
-import { buildQuickPlayMenu } from './quickplay-menu';
+import { buildQuickPlayMenu, handleQuickPlayInteraction } from './quickplay-menu';
 
 const logger = createLogger('discord-commands');
 
@@ -81,6 +81,10 @@ export const slashCommandDefinitions = [
   new SlashCommandBuilder()
     .setName('panel')
     .setDescription('Open the interactive player control panel (volume, filters, playback controls)'),
+
+  new SlashCommandBuilder()
+    .setName('yesterday')
+    .setDescription('Play the songs you played yesterday (auto-expires in 2-3 days)'),
 
   new SlashCommandBuilder()
     .setName('play')
@@ -906,6 +910,33 @@ export async function handleChatInputCommand(
       } catch (err: any) {
         await interaction.editReply(`Failed to open Control Panel: ${err.message}`);
       }
+      break;
+    }
+
+    case 'yesterday': {
+      await handleQuickPlayInteraction(
+        {
+          guildId,
+          customId: 'gakki:qp:yesterday',
+          member: interaction.member,
+          user: interaction.user,
+          client: interaction.client,
+          isButton: () => true,
+          isStringSelectMenu: () => false,
+          deferReply: async () => {
+            if (!interaction.deferred && !interaction.replied) await interaction.deferReply();
+          },
+          editReply: (msg: any) => interaction.editReply(msg),
+        } as any,
+        {
+          playbackManager,
+          analyticsManager,
+          playlistManager,
+          trackManager,
+          recManager,
+          audioSourceManager,
+        },
+      );
       break;
     }
 

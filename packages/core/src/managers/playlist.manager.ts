@@ -1,6 +1,6 @@
 import type { Logger } from 'pino';
 import { randomUUID } from 'node:crypto';
-import { eq, and, asc, sql, ilike, or } from 'drizzle-orm';
+import { eq, and, asc, sql, ilike, or, lt } from 'drizzle-orm';
 import type { DatabaseClient } from '../database/connection';
 import * as schema from '../database/schema';
 import type {
@@ -998,6 +998,142 @@ export class PlaylistManager {
           const saved = await tm.saveTrackWithSource(
             { title: t.title, artist: t.artist ?? null },
             { provider: 'youtube', sourceType: 'stream', sourceUrl: t.title },
+          );
+          trackId = saved.track.id;
+        } catch {
+          // ignore
+        }
+      }
+      if (trackId) {
+        await this.addTrackToPlaylist(playlist.id, trackId);
+        count++;
+      }
+    }
+
+    playlist.trackCount = count;
+    return playlist;
+  }
+
+  /**
+   * Delete expired dynamic playlists older than retentionDays (e.g., 2-3 days).
+   * Identifies playlists with '[auto-yesterday' in description or '📅 Yesterday' in name.
+   */
+  async cleanupExpiredPlaylists(retentionDays: number = 2): Promise<number> {
+    const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
+    let deletedCount = 0;
+
+    if (!this.db) {
+      for (const [id, p] of Array.from(this.inMemoryPlaylists.entries())) {
+        const isYesterdayPl =
+          p.name.includes('Yesterday') ||
+          (p.description && p.description.includes('auto-yesterday'));
+        if (isYesterdayPl) {
+          const createdAt = new Date(p.createdAt);
+          if (createdAt < cutoff) {
+            this.inMemoryPlaylists.delete(id);
+            this.inMemoryTracks.delete(id);
+            deletedCount++;
+          }
+        }
+      }
+      return deletedCount;
+    }
+
+    try {
+      const expiredRows = await this.db
+        .select({ id: schema.playlists.id })
+        .from(schema.playlists)
+        .where(
+          and(
+            lt(schema.playlists.createdAt, cutoff),
+            or(
+              ilike(schema.playlists.name, '%Yesterday%'),
+              ilike(schema.playlists.description, '%auto-yesterday%'),
+            ),
+          ),
+        );
+
+      for (const row of expiredRows) {
+        await this.db.delete(schema.playlists).where(eq(schema.playlists.id, row.id));
+        this.inMemoryPlaylists.delete(row.id);
+        this.inMemoryTracks.delete(row.id);
+        deletedCount++;
+      }
+
+      if (deletedCount > 0) {
+        this.logger.info({ deletedCount, cutoff }, '[PLAYLIST] Cleaned up expired yesterday playlists');
+      }
+      return deletedCount;
+    } catch (err) {
+      this.logger.error({ err }, 'Failed to clean up expired playlists');
+      return 0;
+    }
+  }
+
+  /**
+   * Automatically generate or sync the dynamic "📅 Yesterday's Songs" playlist for a guild or user
+   * based on historical playback analytics. Auto-deletes playlists after 2-3 days.
+   */
+  async syncYesterdayPlaylist(
+    guildId: string,
+    analyticsManager?: any,
+    options?: {
+      userId?: string;
+      referenceDate?: Date;
+      retentionDays?: number;
+      limit?: number;
+    },
+  ): Promise<Playlist | null> {
+    // 1. Purge expired playlists older than retentionDays (default 2 days)
+    await this.cleanupExpiredPlaylists(options?.retentionDays ?? 2).catch(() => 0);
+
+    if (!analyticsManager) return null;
+
+    const refDate = options?.referenceDate ? new Date(options.referenceDate) : new Date();
+    const yesterdayDate = new Date(refDate.getTime() - 24 * 60 * 60 * 1000);
+    const dateStr = yesterdayDate.toISOString().split('T')[0];
+
+    // 2. Fetch tracks played yesterday
+    const tracksYesterday = await analyticsManager.getTracksPlayedYesterday({
+      guildId,
+      userId: options?.userId,
+      referenceDate: refDate,
+      limit: options?.limit ?? 25,
+    });
+
+    if (!tracksYesterday || tracksYesterday.length === 0) {
+      return null;
+    }
+
+    const playlistName = `📅 Yesterday's Songs (${dateStr})`;
+    let playlist = await this.findPlaylistByName(playlistName, { guildId });
+
+    if (!playlist) {
+      playlist = await this.createPlaylist({
+        name: playlistName,
+        description: `[auto-yesterday:${dateStr}] Songs played yesterday on ${dateStr}. Auto-deletes in 2-3 days.`,
+        guildId,
+        ownerUserId: options?.userId,
+        visibility: 'guild',
+      });
+    }
+
+    // Clear old tracks in the yesterday playlist
+    if (!this.db) {
+      this.inMemoryTracks.set(playlist.id, []);
+    } else {
+      await this.db.delete(schema.playlistTracks).where(eq(schema.playlistTracks.playlistId, playlist.id));
+    }
+
+    const tm = this.trackManager || (this.db ? new TrackManager(this.db) : null);
+    let count = 0;
+    for (const t of tracksYesterday) {
+      let trackId = t.trackId;
+      if (!trackId && t.title && tm) {
+        try {
+          const saved = await tm.saveTrackWithSource(
+            { title: t.title, artist: t.artist ?? null },
+            { provider: t.provider || 'youtube', sourceType: 'stream', sourceUrl: t.sourceUrl || t.title },
           );
           trackId = saved.track.id;
         } catch {
