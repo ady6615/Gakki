@@ -148,7 +148,7 @@ export function createVoiceCommandRouter(
   });
 
   // ── Google Meet Integration Endpoints ──────────────────────────
-  router.get('/meet/status', (_req: Request, res: Response) => {
+  router.get(['/meet/status', '/status'], (_req: Request, res: Response) => {
     if (!meetAdapter) {
       return res.json({
         success: true,
@@ -177,7 +177,7 @@ export function createVoiceCommandRouter(
     });
   });
 
-  router.get('/meet/oauth/url', (_req: Request, res: Response) => {
+  router.get(['/meet/oauth/url', '/oauth/url'], (_req: Request, res: Response) => {
     if (!meetAdapter) {
       return res.status(400).json({ error: 'Meet adapter not available' });
     }
@@ -189,7 +189,7 @@ export function createVoiceCommandRouter(
     }
   });
 
-  router.post('/meet/connect', async (req: Request, res: Response) => {
+  router.post(['/meet/connect', '/connect'], async (req: Request, res: Response) => {
     if (!meetAdapter) {
       return res.status(400).json({ error: 'Meet adapter not available' });
     }
@@ -206,7 +206,7 @@ export function createVoiceCommandRouter(
     }
   });
 
-  router.post('/meet/disconnect', async (_req: Request, res: Response) => {
+  router.post(['/meet/disconnect', '/disconnect'], async (_req: Request, res: Response) => {
     if (!meetAdapter) {
       return res.status(400).json({ error: 'Meet adapter not available' });
     }
@@ -218,7 +218,7 @@ export function createVoiceCommandRouter(
     }
   });
 
-  router.get('/meet/participants', (_req: Request, res: Response) => {
+  router.get(['/meet/participants', '/participants'], (_req: Request, res: Response) => {
     if (!meetAdapter) {
       return res.json({ success: true, participants: [] });
     }
@@ -226,7 +226,7 @@ export function createVoiceCommandRouter(
     res.json({ success: true, participants });
   });
 
-  router.post('/meet/record/start', async (req: Request, res: Response) => {
+  router.post(['/meet/record/start', '/record/start'], async (req: Request, res: Response) => {
     if (!meetAdapter) {
       return res.status(400).json({ error: 'Meet adapter not available' });
     }

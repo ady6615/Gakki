@@ -54,6 +54,10 @@ export class VoiceReceiverManager {
     this.voiceAdapter = adapter;
   }
 
+  public getVoiceAdapter(): DiscordVoiceAdapter | undefined {
+    return this.voiceAdapter;
+  }
+
   public getRecordingManager(): RecordingManager {
     return this.recordingManager;
   }

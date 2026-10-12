@@ -68,6 +68,7 @@ export const RecordingsSection: React.FC<RecordingsSectionProps> = ({ guildId })
   const [speakerFilter, setSpeakerFilter] = useState<string>('ALL');
   const [showStartModal, setShowStartModal] = useState<boolean>(false);
   const [newTitle, setNewTitle] = useState<string>('');
+  const [channelId, setChannelId] = useState<string>('');
   const [newVisibility, setNewVisibility] = useState<'GUILD' | 'PRIVATE'>('GUILD');
 
   // Audio Player State
@@ -94,9 +95,10 @@ export const RecordingsSection: React.FC<RecordingsSectionProps> = ({ guildId })
       const res = await fetch(`/api/recordings/active/${guildId}`);
       if (res.ok) {
         const data = await res.json();
-        setActiveSession(data.activeSession || null);
-        if (data.activeSession && data.activeSession.duration) {
-          setActiveElapsed(data.activeSession.duration);
+        const active = data.activeSession || data.activeRecording || null;
+        setActiveSession(active);
+        if (active && active.duration) {
+          setActiveElapsed(active.duration);
         }
       }
     } catch {
@@ -152,6 +154,7 @@ export const RecordingsSection: React.FC<RecordingsSectionProps> = ({ guildId })
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           guildId,
+          channelId: channelId.trim() || undefined,
           startedBy: 'Web Dashboard Operator',
           title: newTitle.trim() || undefined,
           visibility: newVisibility,
@@ -159,15 +162,22 @@ export const RecordingsSection: React.FC<RecordingsSectionProps> = ({ guildId })
       });
       if (res.ok) {
         const data = await res.json();
-        setActiveSession(data.session);
+        setActiveSession(data.session || data.recording);
         setActiveElapsed(0);
         fetchRecordings();
       } else {
-        const err = await res.json();
-        alert(`Failed to start recording: ${err.error || 'Unknown error'}`);
+        let errorMsg = `Server error (${res.status})`;
+        try {
+          const err = await res.json();
+          errorMsg = err.error || err.message || errorMsg;
+        } catch {
+          const text = await res.text().catch(() => '');
+          if (text) errorMsg = text;
+        }
+        alert(`Failed to start recording: ${errorMsg}`);
       }
     } catch (err: any) {
-      alert(`Error starting recording: ${err.message}`);
+      alert(`Error starting recording: ${err.message || 'Unknown network error'}`);
     }
   };
 
@@ -184,11 +194,18 @@ export const RecordingsSection: React.FC<RecordingsSectionProps> = ({ guildId })
         setActiveSession(null);
         await fetchRecordings();
       } else {
-        const err = await res.json();
-        alert(`Failed to stop recording: ${err.error || 'Unknown error'}`);
+        let errorMsg = `Server error (${res.status})`;
+        try {
+          const err = await res.json();
+          errorMsg = err.error || err.message || errorMsg;
+        } catch {
+          const text = await res.text().catch(() => '');
+          if (text) errorMsg = text;
+        }
+        alert(`Failed to stop recording: ${errorMsg}`);
       }
     } catch (err: any) {
-      alert(`Error stopping recording: ${err.message}`);
+      alert(`Error stopping recording: ${err.message || 'Unknown network error'}`);
     }
   };
 
@@ -206,11 +223,18 @@ export const RecordingsSection: React.FC<RecordingsSectionProps> = ({ guildId })
         }
         await fetchRecordings();
       } else {
-        const err = await res.json();
-        alert(`Failed to delete recording: ${err.error}`);
+        let errorMsg = `Server error (${res.status})`;
+        try {
+          const err = await res.json();
+          errorMsg = err.error || err.message || errorMsg;
+        } catch {
+          const text = await res.text().catch(() => '');
+          if (text) errorMsg = text;
+        }
+        alert(`Failed to delete recording: ${errorMsg}`);
       }
     } catch (err: any) {
-      alert(`Error deleting recording: ${err.message}`);
+      alert(`Error deleting recording: ${err.message || 'Unknown network error'}`);
     }
   };
 
@@ -596,6 +620,17 @@ export const RecordingsSection: React.FC<RecordingsSectionProps> = ({ guildId })
                 placeholder="e.g. Weekly Team Discussion, Gaming Night"
                 value={newTitle}
                 onChange={(e) => setNewTitle(e.target.value)}
+              />
+            </div>
+
+            <div className="modal-field">
+              <label>Voice Channel ID (Optional if bot is already in channel):</label>
+              <input
+                type="text"
+                className="modal-input"
+                placeholder="e.g. 123456789012345678"
+                value={channelId}
+                onChange={(e) => setChannelId(e.target.value)}
               />
             </div>
 

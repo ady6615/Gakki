@@ -27,7 +27,8 @@ export function recordingRoutes(
    */
   router.get('/', async (req: Request, res: Response) => {
     try {
-      const guildId = req.query.guildId as string | undefined;
+      const guildIdQuery = req.query.guildId as string | undefined;
+      const guildId = guildIdQuery && guildIdQuery !== 'web-dashboard' ? guildIdQuery : undefined;
       const status = req.query.status as any;
       const transcriptionStatus = req.query.transcriptionStatus as any;
       const visibility = req.query.visibility as any;
@@ -49,6 +50,126 @@ export function recordingRoutes(
     } catch (err: any) {
       logger.error({ err }, 'Failed to list recordings');
       return res.status(500).json({ error: 'Failed to retrieve recording sessions' });
+    }
+  });
+
+  /**
+   * GET /api/recordings/active/:guildId
+   * GET /api/recordings/guild/:guildId/active
+   * GET /api/recordings/active
+   * Get active recording status in guild. (Placed before /:id so 'active' is not treated as an ID)
+   */
+  router.get(['/active/:guildId', '/guild/:guildId/active', '/active'], async (req: Request, res: Response) => {
+    try {
+      let guildId = req.params.guildId || (req.query.guildId as string | undefined);
+      if (!guildId || guildId === 'web-dashboard') {
+        const client = voiceReceiver?.getVoiceAdapter()?.getClient();
+        if (client) {
+          for (const [gid, guild] of client.guilds.cache) {
+            if (voiceReceiver?.isRecording(gid) || guild.members?.me?.voice?.channelId) {
+              guildId = gid;
+              break;
+            }
+          }
+        }
+      }
+
+      let active = null;
+      if (guildId && guildId !== 'web-dashboard') {
+        if (voiceReceiver) {
+          active = await voiceReceiver.getActiveRecording(guildId);
+        } else {
+          active = await recordingManager.getActiveSession(guildId);
+        }
+      }
+
+      return res.json({ activeRecording: active, activeSession: active });
+    } catch (err: any) {
+      logger.error({ err }, 'Failed to check active recording');
+      return res.status(500).json({ error: 'Failed to check active recording' });
+    }
+  });
+
+  /**
+   * POST /api/recordings/start
+   * POST /api/recordings/guild/:guildId/start
+   * Start recording from Web UI or API.
+   */
+  router.post(['/start', '/guild/:guildId/start'], async (req: Request, res: Response) => {
+    if (!voiceReceiver) {
+      return res.status(503).json({ error: 'Voice receiver service not initialized' });
+    }
+
+    try {
+      let guildId = req.params.guildId || req.body.guildId;
+      if (!guildId || guildId === 'web-dashboard') {
+        // Auto-discover the active Discord guild where the bot is currently in a voice channel
+        const client = voiceReceiver.getVoiceAdapter()?.getClient();
+        if (client) {
+          for (const [gid, guild] of client.guilds.cache) {
+            if (guild.members?.me?.voice?.channelId) {
+              guildId = gid;
+              break;
+            }
+          }
+        }
+      }
+
+      if (!guildId || guildId === 'web-dashboard') {
+        return res.status(400).json({
+          error: 'Please connect the bot to a Discord voice channel first (or provide guildId and channelId).',
+        });
+      }
+
+      const { channelId, startedBy, title, visibility } = req.body;
+      const session = await voiceReceiver.startRecording(guildId, {
+        channelId,
+        startedBy: startedBy || 'Web Dashboard Operator',
+        title,
+        visibility,
+      });
+
+      return res.json({ success: true, recording: session, session });
+    } catch (err: any) {
+      logger.error({ err }, 'Web start recording failed');
+      return res.status(400).json({ error: err.message || 'Failed to start recording' });
+    }
+  });
+
+  /**
+   * POST /api/recordings/stop
+   * POST /api/recordings/guild/:guildId/stop
+   * Stop recording from Web UI or API.
+   */
+  router.post(['/stop', '/guild/:guildId/stop'], async (req: Request, res: Response) => {
+    if (!voiceReceiver) {
+      return res.status(503).json({ error: 'Voice receiver service not initialized' });
+    }
+
+    try {
+      let guildId = req.params.guildId || req.body.guildId;
+      if (!guildId || guildId === 'web-dashboard') {
+        const client = voiceReceiver.getVoiceAdapter()?.getClient();
+        if (client) {
+          for (const [gid] of client.guilds.cache) {
+            if (voiceReceiver.isRecording(gid)) {
+              guildId = gid;
+              break;
+            }
+          }
+        }
+      }
+
+      if (!guildId || guildId === 'web-dashboard') {
+        return res.status(400).json({ error: 'guildId is required to stop recording' });
+      }
+
+      const actorUserId = req.body.userId || req.body.actorUserId || 'Web Dashboard Operator';
+      const result = await voiceReceiver.stopRecording(guildId, actorUserId);
+      return res.json({ success: true, result });
+    } catch (err: any) {
+      logger.error({ err }, 'Web stop recording failed');
+      return res.status(400).json({ error: err.message || 'Failed to stop recording' });
     }
   });
 
@@ -78,9 +199,10 @@ export function recordingRoutes(
 
   /**
    * GET /api/recordings/:id/audio
+   * GET /api/recordings/:id/stream
    * Stream audio with HTTP 206 Partial Content range support for browser seeking (Requirement 22).
    */
-  router.get('/:id/audio', async (req: Request, res: Response) => {
+  router.get(['/:id/audio', '/:id/stream'], async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
       const session = await recordingManager.getSession(id);
@@ -128,11 +250,44 @@ export function recordingRoutes(
 
   /**
    * GET /api/recordings/:id/download
-   * Safe download of mixed audio file (Requirement 25).
+   * Safe download of mixed audio file, transcript, or metadata (Requirement 25).
    */
   router.get('/:id/download', async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
+      const downloadType = (req.query.type as string)?.toLowerCase();
+
+      // Handle transcript download requested via ?type=transcript
+      if (downloadType === 'transcript') {
+        if (!transcriptionManager) {
+          return res.status(503).json({ error: 'Transcription service not configured' });
+        }
+        const transcript = await transcriptionManager.getTranscript(id);
+        if (!transcript) {
+          return res.status(404).json({ error: 'Transcript not found for this recording' });
+        }
+        const formattedLines = (transcript.segments || []).map((s) => {
+          const mm = Math.floor(s.startMs / 60000).toString().padStart(2, '0');
+          const ss = Math.floor((s.startMs % 60000) / 1000).toString().padStart(2, '0');
+          return `[${mm}:${ss}] ${s.speakerName || 'Speaker'}:\n${s.text}\n`;
+        });
+        res.setHeader('Content-Disposition', `attachment; filename="transcript-${id.slice(0, 8)}.txt"`);
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        return res.send(formattedLines.join('\n'));
+      }
+
+      // Handle metadata download requested via ?type=metadata
+      if (downloadType === 'metadata') {
+        const session = await recordingManager.getSession(id);
+        if (!session || !session.metadataStorageKey || !fs.existsSync(session.metadataStorageKey)) {
+          return res.status(404).json({ error: 'Metadata file not found' });
+        }
+        res.setHeader('Content-Disposition', `attachment; filename="metadata-${id.slice(0, 8)}.json"`);
+        res.setHeader('Content-Type', 'application/json');
+        return fs.createReadStream(session.metadataStorageKey).pipe(res);
+      }
+
+      // Default: Audio file download
       const session = await recordingManager.getSession(id);
       if (!session || !session.storageKey || !fs.existsSync(session.storageKey)) {
         return res.status(404).json({ error: 'Recording audio file not found' });
@@ -174,10 +329,10 @@ export function recordingRoutes(
       }
 
       // Plain text format with timestamps and speakers
-      const formattedLines = transcript.segments.map((s) => {
+      const formattedLines = (transcript.segments || []).map((s) => {
         const mm = Math.floor(s.startMs / 60000).toString().padStart(2, '0');
         const ss = Math.floor((s.startMs % 60000) / 1000).toString().padStart(2, '0');
-        return `[${mm}:${ss}] ${s.speakerName}:\n${s.text}\n`;
+        return `[${mm}:${ss}] ${s.speakerName || 'Speaker'}:\n${s.text}\n`;
       });
 
       res.setHeader('Content-Disposition', `attachment; filename="transcript-${id.slice(0, 8)}.txt"`);
@@ -296,71 +451,6 @@ export function recordingRoutes(
     } catch (err: any) {
       logger.error({ err }, 'Failed to delete recording');
       return res.status(500).json({ error: 'Failed to delete recording' });
-    }
-  });
-
-  /**
-   * GET /api/recordings/guild/:guildId/active
-   * Get active recording status in guild.
-   */
-  router.get('/guild/:guildId/active', async (req: Request, res: Response) => {
-    try {
-      const { guildId } = req.params;
-      let active = null;
-      if (voiceReceiver) {
-        active = await voiceReceiver.getActiveRecording(guildId);
-      } else {
-        active = await recordingManager.getActiveSession(guildId);
-      }
-      return res.json({ activeRecording: active });
-    } catch (err: any) {
-      logger.error({ err }, 'Failed to check active recording');
-      return res.status(500).json({ error: 'Failed to check active recording' });
-    }
-  });
-
-  /**
-   * POST /api/recordings/guild/:guildId/start
-   * Start recording from Web UI.
-   */
-  router.post('/guild/:guildId/start', async (req: Request, res: Response) => {
-    if (!voiceReceiver) {
-      return res.status(503).json({ error: 'Voice receiver service not initialized' });
-    }
-
-    try {
-      const { guildId } = req.params;
-      const { channelId, startedBy, title, visibility } = req.body;
-      const session = await voiceReceiver.startRecording(guildId, {
-        channelId,
-        startedBy: startedBy || 'web-user',
-        title,
-        visibility,
-      });
-      return res.json({ success: true, recording: session });
-    } catch (err: any) {
-      logger.error({ err }, 'Web start recording failed');
-      return res.status(400).json({ error: err.message || 'Failed to start recording' });
-    }
-  });
-
-  /**
-   * POST /api/recordings/guild/:guildId/stop
-   * Stop recording from Web UI.
-   */
-  router.post('/guild/:guildId/stop', async (req: Request, res: Response) => {
-    if (!voiceReceiver) {
-      return res.status(503).json({ error: 'Voice receiver service not initialized' });
-    }
-
-    try {
-      const { guildId } = req.params;
-      const actorUserId = req.body.userId || 'web-user';
-      const result = await voiceReceiver.stopRecording(guildId, actorUserId);
-      return res.json({ success: true, result });
-    } catch (err: any) {
-      logger.error({ err }, 'Web stop recording failed');
-      return res.status(400).json({ error: err.message || 'Failed to stop recording' });
     }
   });
 

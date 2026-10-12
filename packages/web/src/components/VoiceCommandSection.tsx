@@ -342,11 +342,18 @@ export const VoiceCommandSection: React.FC = () => {
         const data = await res.json();
         showToast(`🎙️ Linked conference audio to Recording ID: ${data.recordingId}`);
       } else {
-        const err = await res.json();
-        showToast(`Recording link error: ${err.error}`);
+        let errorMsg = `Server error (${res.status})`;
+        try {
+          const err = await res.json();
+          errorMsg = err.error || err.message || errorMsg;
+        } catch {
+          const text = await res.text().catch(() => '');
+          if (text) errorMsg = text;
+        }
+        showToast(`Recording link error: ${errorMsg}`);
       }
     } catch (err: any) {
-      showToast(`Error starting recording: ${err.message}`);
+      showToast(`Error starting recording: ${err.message || 'Unknown network error'}`);
     }
   };
 

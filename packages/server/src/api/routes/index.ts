@@ -107,5 +107,12 @@ export function createRoutes(
     router.use('/meet', voiceRouter);
   }
 
+  // Catch-all 404 handler for API routes: always return JSON, never HTML
+  router.use((req, res) => {
+    res.status(404).json({
+      error: `API endpoint not found: ${req.method} ${req.originalUrl || req.url}`,
+    });
+  });
+
   return router;
 }
