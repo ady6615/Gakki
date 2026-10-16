@@ -302,6 +302,38 @@ export const slashCommandDefinitions = [
     .setDescription('Skip the current track and play the next in queue'),
 
   new SlashCommandBuilder()
+    .setName('seek')
+    .setDescription('Navigate / seek to a position in the current song (e.g. 1:30 or 90)')
+    .addStringOption((option) =>
+      option
+        .setName('position')
+        .setDescription('Target position in seconds or M:SS format (e.g. 1:30, 45, or +30, -10)')
+        .setRequired(true),
+    ),
+
+  new SlashCommandBuilder()
+    .setName('forward')
+    .setDescription('Skip ahead in the current song by seconds (e.g. 10s, 30s)')
+    .addIntegerOption((option) =>
+      option
+        .setName('seconds')
+        .setDescription('Number of seconds to skip forward (default: 10)')
+        .setRequired(false)
+        .setMinValue(1),
+    ),
+
+  new SlashCommandBuilder()
+    .setName('rewind')
+    .setDescription('Go back in the current song by seconds (e.g. 10s, 30s)')
+    .addIntegerOption((option) =>
+      option
+        .setName('seconds')
+        .setDescription('Number of seconds to rewind (default: 10)')
+        .setRequired(false)
+        .setMinValue(1),
+    ),
+
+  new SlashCommandBuilder()
     .setName('leave')
     .setDescription('Stop playback and leave the voice channel'),
 
@@ -1598,6 +1630,82 @@ export async function handleChatInputCommand(
         );
       } else {
         await interaction.reply('⏭️ Skipped track. The queue is now empty.');
+      }
+      break;
+    }
+
+    case 'seek': {
+      const posInput = interaction.options.getString('position', true).trim();
+      const currentTrack = playbackManager.getCurrentTrack(guildId);
+      if (!currentTrack) {
+        await interaction.reply({ content: 'No track is currently playing.', ephemeral: true });
+        return;
+      }
+
+      let targetSec = 0;
+      let isRelative = false;
+
+      if (posInput.startsWith('+') || posInput.startsWith('-')) {
+        isRelative = true;
+        targetSec = parseInt(posInput, 10);
+      } else if (posInput.includes(':')) {
+        const parts = posInput.split(':').map((p) => parseInt(p, 10));
+        if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+          targetSec = parts[0] * 60 + parts[1];
+        } else if (parts.length === 3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
+          targetSec = parts[0] * 3600 + parts[1] * 60 + parts[2];
+        } else {
+          await interaction.reply({ content: 'Invalid timestamp format. Use MM:SS or seconds (e.g. `1:30` or `90`).', ephemeral: true });
+          return;
+        }
+      } else {
+        targetSec = parseInt(posInput, 10);
+      }
+
+      if (isNaN(targetSec)) {
+        await interaction.reply({ content: 'Invalid position. Use seconds or MM:SS format (e.g. `1:30` or `+30`).', ephemeral: true });
+        return;
+      }
+
+      const newPos = await playbackManager.seek(guildId, targetSec, isRelative);
+      if (newPos !== null) {
+        await interaction.reply(`🧭 Navigated to **${formatDuration(newPos)}** / **${formatDuration(currentTrack.duration)}**`);
+      } else {
+        await interaction.reply({ content: 'Failed to seek in current track.', ephemeral: true });
+      }
+      break;
+    }
+
+    case 'forward': {
+      const seconds = interaction.options.getInteger('seconds') ?? 10;
+      const currentTrack = playbackManager.getCurrentTrack(guildId);
+      if (!currentTrack) {
+        await interaction.reply({ content: 'No track is currently playing.', ephemeral: true });
+        return;
+      }
+
+      const newPos = await playbackManager.seek(guildId, seconds, true);
+      if (newPos !== null) {
+        await interaction.reply(`⏩ Skipped forward **+${seconds}s** → **${formatDuration(newPos)}** / **${formatDuration(currentTrack.duration)}**`);
+      } else {
+        await interaction.reply({ content: 'Failed to seek forward.', ephemeral: true });
+      }
+      break;
+    }
+
+    case 'rewind': {
+      const seconds = interaction.options.getInteger('seconds') ?? 10;
+      const currentTrack = playbackManager.getCurrentTrack(guildId);
+      if (!currentTrack) {
+        await interaction.reply({ content: 'No track is currently playing.', ephemeral: true });
+        return;
+      }
+
+      const newPos = await playbackManager.seek(guildId, -seconds, true);
+      if (newPos !== null) {
+        await interaction.reply(`⏪ Rewound **-${seconds}s** → **${formatDuration(newPos)}** / **${formatDuration(currentTrack.duration)}**`);
+      } else {
+        await interaction.reply({ content: 'Failed to rewind.', ephemeral: true });
       }
       break;
     }

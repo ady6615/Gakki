@@ -2,6 +2,7 @@ import { Router } from 'express';
 import type { PlaybackManager, AudioPlayerManager, LoopMode } from '@gakki/core';
 import { listLocalAudioFiles } from '../../audio/local-files';
 import { getDiscordClient } from '../../discord';
+import { broadcastEvent } from '../../websocket';
 
 export function playbackRoutes(manager?: PlaybackManager | AudioPlayerManager): Router {
   const router = Router();
@@ -271,6 +272,44 @@ export function playbackRoutes(manager?: PlaybackManager | AudioPlayerManager): 
     }
     const result = await activePlaybackManager.skip(guildId);
     res.json({ success: true, ...result });
+  });
+
+  /**
+   * POST /api/playback/:guildId/seek
+   * Seek / navigate the current playing song.
+   * Body: { seconds: number, relative?: boolean }
+   */
+  router.post('/:guildId/seek', async (req, res) => {
+    const { guildId } = req.params;
+    const { seconds, relative } = req.body;
+
+    if (!activePlaybackManager) {
+      res.status(503).json({ success: false, error: 'Playback manager not initialized' });
+      return;
+    }
+
+    if (seconds === undefined || typeof seconds !== 'number' || isNaN(seconds)) {
+      res.status(400).json({ success: false, error: 'seconds must be a valid number' });
+      return;
+    }
+
+    try {
+      const positionSeconds = await activePlaybackManager.seek(guildId, seconds, Boolean(relative));
+      if (positionSeconds === null) {
+        res.status(404).json({ success: false, error: 'No active track playing to seek' });
+        return;
+      }
+
+      broadcastEvent({
+        type: 'playback.seeked',
+        guildId,
+        positionSeconds,
+      });
+
+      res.json({ success: true, positionSeconds });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
   });
 
   return router;

@@ -2061,6 +2061,99 @@ body {
   font-family: monospace;
 }
 
+.clickable-scrubber {
+  cursor: pointer;
+  transition: height 0.15s ease;
+}
+
+.clickable-scrubber:hover {
+  height: 8px;
+}
+
+/* ── Song Navigation Setting & Controls ─────────────────────── */
+
+.navigation-controls-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.4rem 0.6rem;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  flex-wrap: wrap;
+}
+
+.nav-step-buttons {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.nav-btn {
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text-primary);
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 0.35rem 0.65rem;
+  border-radius: 8px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  white-space: nowrap;
+}
+
+.nav-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.16);
+  transform: translateY(-1px);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.nav-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.nav-select-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 0.25rem 0.5rem;
+  flex: 1;
+  min-width: 160px;
+}
+
+.nav-select-icon {
+  font-size: 0.9rem;
+}
+
+.nav-select-menu {
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  width: 100%;
+  cursor: pointer;
+  outline: none;
+}
+
+.nav-select-menu option {
+  background: #181824;
+  color: #fff;
+}
+
+.nav-select-menu:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* ── Playback Controls ───────────────────────────────────────── */
 
 .playback-controls-row {

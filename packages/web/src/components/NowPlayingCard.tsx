@@ -126,6 +126,10 @@ export function NowPlayingCard({
               strategy: `Fallback: ${msg.reason || 'Equal-power Crossfade'}`,
             }));
             setTimeout(() => setTransition({ state: 'idle' }), 5000);
+          } else if (msg.type === 'playback.seeked') {
+            if (typeof msg.positionSeconds === 'number') {
+              setElapsedSeconds(msg.positionSeconds);
+            }
           }
         } catch {
           // ignore
@@ -214,6 +218,24 @@ export function NowPlayingCard({
         body: JSON.stringify({ mode: nextMode }),
       });
       onRefreshSettings?.();
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleSeek = async (seconds: number, relative: boolean = false) => {
+    if (!guildId || !activeTrack) return;
+    try {
+      const current = elapsedSeconds;
+      const target = relative ? Math.max(0, current + seconds) : Math.max(0, seconds);
+      const clamped = activeTrack.duration ? Math.min(target, Math.max(0, activeTrack.duration - 2)) : target;
+      setElapsedSeconds(clamped);
+
+      await fetch(`/api/playback/${guildId}/seek`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ seconds, relative }),
+      });
     } catch {
       // ignore
     }
@@ -312,9 +334,24 @@ export function NowPlayingCard({
         </div>
       )}
 
-      {/* Progress Timeline Scrubber */}
+      {/* Progress Timeline Scrubber with Clickable Seek */}
       <div className="timeline-container">
-        <div className="progress-bar-bg" role="progressbar" aria-valuenow={progressPercent} aria-valuemin={0} aria-valuemax={100}>
+        <div
+          className="progress-bar-bg clickable-scrubber"
+          role="progressbar"
+          aria-valuenow={progressPercent}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          onClick={(e) => {
+            if (!duration || !activeTrack) return;
+            const rect = e.currentTarget.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const ratio = Math.max(0, Math.min(1, clickX / rect.width));
+            const targetSec = Math.floor(ratio * duration);
+            handleSeek(targetSec, false);
+          }}
+          title="Click timeline to seek position"
+        >
           <div className="progress-bar-fill" style={{ width: `${progressPercent}%` }}>
             <span className="progress-scrubber-handle" />
           </div>
@@ -322,6 +359,85 @@ export function NowPlayingCard({
         <div className="timeline-timestamps">
           <span>{formatDuration(elapsedSeconds)}</span>
           <span>{formatDuration(duration)}</span>
+        </div>
+      </div>
+
+      {/* Song Navigation Setting Control Row */}
+      <div className="navigation-controls-row">
+        <div className="nav-step-buttons">
+          <button
+            className="nav-btn"
+            onClick={() => handleSeek(-30, true)}
+            disabled={!activeTrack || actionLoading}
+            title="Rewind 30 seconds"
+            aria-label="Rewind 30 seconds"
+          >
+            ⏪ −30s
+          </button>
+          <button
+            className="nav-btn"
+            onClick={() => handleSeek(-10, true)}
+            disabled={!activeTrack || actionLoading}
+            title="Rewind 10 seconds"
+            aria-label="Rewind 10 seconds"
+          >
+            ◀️ −10s
+          </button>
+          <button
+            className="nav-btn"
+            onClick={() => handleSeek(10, true)}
+            disabled={!activeTrack || actionLoading}
+            title="Skip forward 10 seconds"
+            aria-label="Skip forward 10 seconds"
+          >
+            ▶️ +10s
+          </button>
+          <button
+            className="nav-btn"
+            onClick={() => handleSeek(30, true)}
+            disabled={!activeTrack || actionLoading}
+            title="Skip forward 30 seconds"
+            aria-label="Skip forward 30 seconds"
+          >
+            ⏩ +30s
+          </button>
+        </div>
+
+        <div className="nav-select-wrapper" title="Song Navigation Setting">
+          <span className="nav-select-icon">🧭</span>
+          <select
+            className="nav-select-menu"
+            disabled={!activeTrack || actionLoading}
+            onChange={(e) => {
+              const val = e.target.value;
+              if (!val) return;
+              if (val.startsWith('rel_')) {
+                handleSeek(parseInt(val.replace('rel_', ''), 10), true);
+              } else if (val === 'abs_0') {
+                handleSeek(0, false);
+              } else if (val.startsWith('pct_')) {
+                const pct = parseInt(val.replace('pct_', ''), 10);
+                const target = Math.floor(((duration || 0) * pct) / 100);
+                handleSeek(target, false);
+              }
+              e.target.value = '';
+            }}
+            defaultValue=""
+            aria-label="Song Navigation Setting"
+          >
+            <option value="" disabled>
+              Navigate Song...
+            </option>
+            <option value="rel_-30">⏪ Rewind 30s</option>
+            <option value="rel_-10">◀️ Rewind 10s</option>
+            <option value="rel_10">▶️ Skip ahead 10s</option>
+            <option value="rel_30">⏩ Skip ahead 30s</option>
+            <option value="rel_60">⏭️ Skip ahead 60s</option>
+            <option value="abs_0">⏮️ Restart song (0:00)</option>
+            <option value="pct_25">¼ Jump to 25%</option>
+            <option value="pct_50">½ Jump to 50% (Halfway)</option>
+            <option value="pct_75">¾ Jump to 75%</option>
+          </select>
         </div>
       </div>
 

@@ -59,6 +59,10 @@ export class AudioPlayerManager {
     return true;
   }
 
+  async seek(guildId: string, targetSeconds: number, relative: boolean = false): Promise<number | null> {
+    return this.playbackManager.seek(guildId, targetSeconds, relative);
+  }
+
   stop(guildId: string): boolean {
     return this.playbackManager.stop(guildId);
   }

@@ -975,6 +975,50 @@ export class PlaybackManager {
   }
 
   /**
+   * Seek / navigate the currently playing song by an absolute or relative number of seconds.
+   *
+   * @param guildId - Guild identifier
+   * @param targetSeconds - Target timestamp in seconds, or relative delta (+10, -30, etc.)
+   * @param relative - If true, targetSeconds is added to current elapsed playback seconds
+   * @returns Destination timestamp in seconds, or null if no track is playing
+   */
+  async seek(guildId: string, targetSeconds: number, relative: boolean = false): Promise<number | null> {
+    const track = this.getCurrentTrack(guildId);
+    if (!track) {
+      return null;
+    }
+
+    const currentDurationMs = this.getPlaybackDuration(guildId);
+    const currentSeconds = Math.floor(currentDurationMs / 1000);
+
+    let destinationSec = relative ? currentSeconds + targetSeconds : targetSeconds;
+    destinationSec = Math.max(0, destinationSec);
+    if (track.duration && track.duration > 0 && destinationSec >= track.duration) {
+      destinationSec = Math.max(0, track.duration - 2);
+    }
+
+    const filters = this.getFilters(guildId);
+    if (this.adapter?.rebuildCurrentStream) {
+      await this.adapter.rebuildCurrentStream(guildId, filters, destinationSec);
+    }
+
+    this.logger.info(
+      { guildId, fromSec: currentSeconds, toSec: destinationSec, relative, track: track.name },
+      '[SEEK] Navigated playback to %ds',
+      destinationSec,
+    );
+
+    this.emitPlaybackEvent({
+      type: 'playback.seeked',
+      guildId,
+      track,
+      positionSeconds: destinationSec,
+    });
+
+    return destinationSec;
+  }
+
+  /**
    * Get guild loop mode ('off' | 'track' | 'queue').
    */
   getLoopMode(guildId: string): LoopMode {

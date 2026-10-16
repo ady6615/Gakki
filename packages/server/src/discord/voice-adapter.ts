@@ -60,6 +60,7 @@ export class DiscordVoiceAdapter implements VoicePlatformAdapter {
   private readonly guildVolumes = new Map<string, number>();
   private readonly guildFilters = new Map<string, AudioFilterConfig>();
   private readonly activeCacheKeys = new Map<string, string>();
+  private readonly seekOffsets = new Map<string, number>();
   private readonly remoteStreamManager: RemoteStreamManager;
 
   private readonly stateListeners = new Set<StateChangeListener>();
@@ -301,6 +302,7 @@ export class DiscordVoiceAdapter implements VoicePlatformAdapter {
     }
 
     this.activeResources.set(guildId, resource);
+    this.seekOffsets.set(guildId, (options?.seekSeconds ?? 0) * 1000);
 
     resource.playStream.on('error', (streamErr) => {
       logger.error({ err: streamErr, guildId }, '[ERROR] Audio stream error');
@@ -359,11 +361,13 @@ export class DiscordVoiceAdapter implements VoicePlatformAdapter {
     const player = this.players.get(guildId);
     if (!player) return;
 
-    const oldResource = this.activeResources.get(guildId);
+    const currentTotalElapsed = this.getPlaybackDuration(guildId);
     const elapsed =
       seekSeconds !== undefined
         ? seekSeconds
-        : Math.floor((oldResource?.playbackDuration || 0) / 1000);
+        : Math.floor(currentTotalElapsed / 1000);
+
+    this.seekOffsets.set(guildId, elapsed * 1000);
 
     // Terminate old FFmpeg process
     const prevProc = this.activeProcesses.get(guildId);
@@ -415,7 +419,8 @@ export class DiscordVoiceAdapter implements VoicePlatformAdapter {
    */
   getPlaybackDuration(guildId: string): number {
     const resource = this.activeResources.get(guildId);
-    return resource?.playbackDuration || 0;
+    const offset = this.seekOffsets.get(guildId) || 0;
+    return offset + (resource?.playbackDuration || 0);
   }
 
   /**
@@ -478,6 +483,7 @@ export class DiscordVoiceAdapter implements VoicePlatformAdapter {
     const stopped = player.stop(true);
     logger.info({ guildId }, '[AUDIO] Stopped');
     this.currentTracks.set(guildId, null);
+    this.seekOffsets.delete(guildId);
     this.setPlayerState(guildId, 'IDLE');
     return stopped;
   }
@@ -540,6 +546,7 @@ export class DiscordVoiceAdapter implements VoicePlatformAdapter {
     player.on(AudioPlayerStatus.Idle, () => {
       logger.info({ guildId }, '[AUDIO] Idle');
       this.currentTracks.set(guildId, null);
+      this.seekOffsets.delete(guildId);
       this.setPlayerState(guildId, 'IDLE');
       for (const listener of this.trackEndListeners) {
         try {
@@ -576,6 +583,7 @@ export class DiscordVoiceAdapter implements VoicePlatformAdapter {
       this.players.delete(guildId);
     }
     this.currentTracks.delete(guildId);
+    this.seekOffsets.delete(guildId);
 
     // Abort pending remote stream and clean up ephemeral cache file
     this.remoteStreamManager.abortGuildStream(guildId);
