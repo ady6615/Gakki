@@ -112,6 +112,31 @@ export const slashCommandDefinitions = [
     ),
 
   new SlashCommandBuilder()
+    .setName('playnext')
+    .setDescription('Play a song right after current song (top of queue)')
+    .addStringOption((option) =>
+      option
+        .setName('input')
+        .setDescription('Song title, artist, URL, or local file')
+        .setRequired(false)
+        .setAutocomplete(true),
+    )
+    .addStringOption((option) =>
+      option
+        .setName('folder')
+        .setDescription('Mention a whole music folder (name in storage/music or full local path)')
+        .setRequired(false)
+        .setAutocomplete(true),
+    )
+    .addStringOption((option) =>
+      option
+        .setName('file')
+        .setDescription('Local file name in storage/music (legacy compatibility)')
+        .setRequired(false)
+        .setAutocomplete(true),
+    ),
+
+  new SlashCommandBuilder()
     .setName('search')
     .setDescription('Search local library and authorized audio sources')
     .addStringOption((option) =>
@@ -972,8 +997,10 @@ export async function handleChatInputCommand(
       break;
     }
 
-    case 'play': {
+    case 'play':
+    case 'playnext': {
       await interaction.deferReply();
+      const isPlayNext = commandName === 'playnext';
 
       // Rate limiting
       const userId = member?.user?.id || member?.id || 'anonymous';
@@ -1033,6 +1060,7 @@ export async function handleChatInputCommand(
             targetFolder,
             playbackManager.queueManager,
             userTag,
+            { playNext: isPlayNext },
           );
 
           // If playback is currently idle, start playing the first track immediately
@@ -1045,10 +1073,12 @@ export async function handleChatInputCommand(
               `📁 Enqueued folder **${path.basename(targetFolder)}** (${addedTracks.length} tracks).\n▶️ Now playing: **${nowPlaying?.name || addedTracks[0].name}**`,
             );
           } else {
-            await interaction.editReply(
-              `📁 Added **${addedTracks.length}** track(s) from folder **${path.basename(targetFolder)}** to the queue.`,
-            );
+            const replyMsg = isPlayNext
+              ? `📁 Added **${addedTracks.length}** track(s) from folder **${path.basename(targetFolder)}** to play next (top of queue).`
+              : `📁 Added **${addedTracks.length}** track(s) from folder **${path.basename(targetFolder)}** to the queue.`;
+            await interaction.editReply(replyMsg);
           }
+          await refreshPanel(guildId, playbackManager).catch(() => {});
           return;
         } catch (fErr: any) {
           await interaction.editReply(`❌ Failed to enqueue folder: ${fErr.message}`);
@@ -1104,12 +1134,12 @@ export async function handleChatInputCommand(
             sourceUrl: first.spotifyUrl,
             addedBy: userTag,
             userId: member?.user?.id || member?.id,
-          });
+          }, { playNext: isPlayNext });
 
           // Enqueue the rest of the collection
           for (let i = 1; i < collection.tracks.length; i++) {
             const t = collection.tracks[i];
-            playbackManager.queueManager.enqueue(guildId, {
+            const trackItem = {
               name: `${t.artist} - ${t.title}`,
               path: t.spotifyUrl || `ytsearch:${t.artist} - ${t.title}`,
               duration: t.durationSec,
@@ -1120,7 +1150,12 @@ export async function handleChatInputCommand(
               sourceUrl: t.spotifyUrl,
               addedBy: userTag,
               userId: member?.user?.id || member?.id,
-            });
+            };
+            if (isPlayNext) {
+              playbackManager.queueManager.addTrackNext(guildId, trackItem);
+            } else {
+              playbackManager.queueManager.enqueue(guildId, trackItem);
+            }
           }
 
           // Persist imported playlist and tracks in PostgreSQL if managers available
@@ -1149,7 +1184,7 @@ export async function handleChatInputCommand(
           }
 
           const embed = new EmbedBuilder()
-            .setTitle(`🟢 Queued Spotify ${collection.type === 'album' ? 'Album' : 'Playlist'}: ${collection.title}`)
+            .setTitle(isPlayNext ? `⏩ Queued Spotify ${collection.type === 'album' ? 'Album' : 'Playlist'} to Play Next: ${collection.title}` : `🟢 Queued Spotify ${collection.type === 'album' ? 'Album' : 'Playlist'}: ${collection.title}`)
             .setDescription(
               `Loaded **${collection.tracks.length}** tracks into queue.\n` +
               `▶️ **Now Playing:** **${firstResolved.title}**${firstResolved.metadata.artist ? ` by *${firstResolved.metadata.artist}*` : ''}`,
@@ -1162,6 +1197,7 @@ export async function handleChatInputCommand(
           }
 
           await interaction.editReply({ embeds: [embed] });
+          await refreshPanel(guildId, playbackManager).catch(() => {});
           return;
         } catch (colErr: any) {
           logger.warn({ colErr, input }, '[AUDIO] Failed to enqueue Spotify collection');
@@ -1208,12 +1244,12 @@ export async function handleChatInputCommand(
             sourceUrl: first.sourceUrl,
             addedBy: userTag,
             userId: member?.user?.id || member?.id,
-          });
+          }, { playNext: isPlayNext });
 
           // Enqueue the rest of the collection
           for (let i = 1; i < collection.tracks.length; i++) {
             const t = collection.tracks[i];
-            playbackManager.queueManager.enqueue(guildId, {
+            const trackItem = {
               name: t.artist ? `${t.artist} - ${t.title}` : t.title,
               path: t.sourceUrl,
               duration: t.duration,
@@ -1224,7 +1260,12 @@ export async function handleChatInputCommand(
               sourceUrl: t.sourceUrl,
               addedBy: userTag,
               userId: member?.user?.id || member?.id,
-            });
+            };
+            if (isPlayNext) {
+              playbackManager.queueManager.addTrackNext(guildId, trackItem);
+            } else {
+              playbackManager.queueManager.enqueue(guildId, trackItem);
+            }
           }
 
           // Persist imported playlist and tracks in PostgreSQL if managers available
@@ -1253,7 +1294,7 @@ export async function handleChatInputCommand(
           }
 
           const embed = new EmbedBuilder()
-            .setTitle(`▶️ Queued YouTube Playlist: ${collection.title}`)
+            .setTitle(isPlayNext ? `⏩ Queued YouTube Playlist to Play Next: ${collection.title}` : `▶️ Queued YouTube Playlist: ${collection.title}`)
             .setDescription(
               `Loaded **${collection.tracks.length}** tracks into queue.\n` +
               `▶️ **Now Playing:** **${firstResolved.title}**${firstResolved.metadata.artist ? ` by *${firstResolved.metadata.artist}*` : ''}`,
@@ -1266,6 +1307,7 @@ export async function handleChatInputCommand(
           }
 
           await interaction.editReply({ embeds: [embed] });
+          await refreshPanel(guildId, playbackManager).catch(() => {});
           return;
         } catch (ytErr: any) {
           logger.warn({ ytErr, input }, '[AUDIO] Failed to enqueue YouTube playlist');
@@ -1357,7 +1399,7 @@ export async function handleChatInputCommand(
           sourceUrl: input,
           addedBy: member.displayName || member.user?.username,
           userId: member.user?.id || member.id,
-        });
+        }, { playNext: isPlayNext });
 
         if (playResult.status === 'started') {
           const embed = new EmbedBuilder()
@@ -1380,12 +1422,14 @@ export async function handleChatInputCommand(
             embeds: [embed],
           });
         } else {
+          const embedTitle = isPlayNext ? '⏩ Added to Play Next' : '➕ Added to Queue';
+          const posText = isPlayNext ? `**#${playResult.position} (Up Next)**` : `**#${playResult.position}**`;
           const embed = new EmbedBuilder()
-            .setTitle('➕ Added to Queue')
+            .setTitle(embedTitle)
             .setDescription(`**${trackTitle}**${trackArtist ? `\n*${trackArtist}*` : ''}`)
-            .setColor(0x3b82f6)
+            .setColor(isPlayNext ? 0x10b981 : 0x3b82f6)
             .addFields(
-              { name: 'Position', value: `**#${playResult.position}**`, inline: true },
+              { name: 'Position', value: posText, inline: true },
               { name: 'Duration', value: `\`${durationStr}\``, inline: true },
               { name: 'Source', value: sourceProviderName, inline: true },
             );
@@ -1393,11 +1437,16 @@ export async function handleChatInputCommand(
             embed.setThumbnail(trackThumb);
           }
 
+          const replyText = isPlayNext
+            ? `⏩ Added to play next: **${trackTitle}**${trackArtist ? ` by **${trackArtist}**` : ''}\nPosition: **#${playResult.position}** (Plays after current song)`
+            : `➕ Added to queue: **${trackTitle}**${trackArtist ? ` by **${trackArtist}**` : ''}\nPosition: **${playResult.position}**`;
+
           await interaction.editReply({
-            content: `➕ Added to queue: **${trackTitle}**${trackArtist ? ` by **${trackArtist}**` : ''}\nPosition: **${playResult.position}**`,
+            content: replyText,
             embeds: [embed],
           });
         }
+        await refreshPanel(guildId, playbackManager).catch(() => {});
       } catch (error) {
         logger.error({ err: error, guildId }, '[ERROR] Playback failed');
         await interaction.editReply(`Playback failed: ${(error as Error).message}`);

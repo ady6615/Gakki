@@ -204,8 +204,12 @@ export async function createDiscordBot(
         await handleControlPanelButton(interaction, activeManager);
       } else if (interaction.isStringSelectMenu() && interaction.customId.startsWith('gakki:')) {
         await handleControlPanelSelectMenu(interaction, activeManager);
-      } else if (interaction.isModalSubmit() && interaction.customId === 'gakki:play_modal') {
-        // Handle the play modal from the control panel
+      } else if (
+        interaction.isModalSubmit() &&
+        (interaction.customId === 'gakki:play_modal' || interaction.customId === 'gakki:playnext_modal')
+      ) {
+        // Handle the play / playnext modal from the control panel
+        const isPlayNext = interaction.customId === 'gakki:playnext_modal';
         const input = await handleControlPanelModal(interaction);
         if (input && interaction.guildId) {
           await interaction.deferReply();
@@ -264,7 +268,7 @@ export async function createDiscordBot(
               sourceUrl: input,
               addedBy: member?.displayName || interaction.user.username,
               userId: interaction.user.id,
-            });
+            }, { playNext: isPlayNext });
 
             const durationStr = formatDuration(resolved.duration);
             if (playResult.status === 'started') {
@@ -272,9 +276,15 @@ export async function createDiscordBot(
                 `▶️ Now playing: **${resolved.name}**${resolved.artist ? ` by **${resolved.artist}**` : ''} \`[${durationStr}]\``,
               );
             } else {
-              await interaction.editReply(
-                `➕ Added to queue at position **#${playResult.position}**: **${resolved.name}** \`[${durationStr}]\``,
-              );
+              if (isPlayNext) {
+                await interaction.editReply(
+                  `⏩ Added to play next at position **#${playResult.position}**: **${resolved.name}** \`[${durationStr}]\` (plays after current song)`,
+                );
+              } else {
+                await interaction.editReply(
+                  `➕ Added to queue at position **#${playResult.position}**: **${resolved.name}** \`[${durationStr}]\``,
+                );
+              }
             }
             await refreshPanel(guildId, activeManager).catch(() => {});
           } catch (err: any) {

@@ -19,6 +19,7 @@ export interface QueueTrack {
   sourceUrl?: string;
   source?: string | null;
   artwork?: string | null;
+  playNext?: boolean;
 }
 
 /**
@@ -44,6 +45,7 @@ export interface QueueDisplayItem {
   addedBy?: string;
   source?: string | null;
   artwork?: string | null;
+  playNext?: boolean;
 }
 
 /**

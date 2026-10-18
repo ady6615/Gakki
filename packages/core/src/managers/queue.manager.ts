@@ -76,6 +76,7 @@ export class QueueManager {
       sourceUrl: trackInput.sourceUrl,
       source: trackInput.source,
       artwork: trackInput.artwork,
+      playNext: trackInput.playNext,
     };
 
     queue.tracks.push(track);
@@ -99,6 +100,111 @@ export class QueueManager {
   }
 
   /**
+   * Add a single track to play next.
+   * If there are already playNext tracks queued at the front of the queue,
+   * this track is inserted immediately after them (so subsequent playnext tracks
+   * play in the order they were added), and ahead of any normal queue items.
+   */
+  addTrackNext(
+    guildId: string,
+    trackInput: Omit<QueueTrack, 'id'> & { id?: string },
+  ): { track: QueueTrack; position: number } {
+    const queue = this.getOrCreateQueue(guildId);
+    const track: QueueTrack = {
+      id: trackInput.id || randomUUID(),
+      trackId: trackInput.trackId,
+      name: trackInput.name,
+      path: trackInput.path,
+      duration: trackInput.duration,
+      addedBy: trackInput.addedBy,
+      userId: trackInput.userId,
+      artist: trackInput.artist,
+      album: trackInput.album,
+      thumbnailUrl: trackInput.thumbnailUrl,
+      sourceProvider: trackInput.sourceProvider,
+      sourceUrl: trackInput.sourceUrl,
+      source: trackInput.source,
+      artwork: trackInput.artwork,
+      playNext: true,
+    };
+
+    // Insert after any existing contiguous playNext tracks at the front of the queue
+    let insertIndex = 0;
+    while (
+      insertIndex < queue.tracks.length &&
+      queue.tracks[insertIndex].playNext === true
+    ) {
+      insertIndex++;
+    }
+
+    queue.tracks.splice(insertIndex, 0, track);
+    const position = insertIndex + 1;
+
+    this.logger.info(
+      { guildId, trackId: track.id, name: track.name, position },
+      '[QUEUE] Added track to play next: %s at position %d',
+      track.name,
+      position,
+    );
+    this.notifyChange(guildId);
+    return { track, position };
+  }
+
+  /**
+   * Add multiple tracks to play next in contiguous order ahead of normal queue tracks.
+   */
+  addTracksNext(
+    guildId: string,
+    trackInputs: Array<Omit<QueueTrack, 'id'> & { id?: string }>,
+  ): QueueTrack[] {
+    const queue = this.getOrCreateQueue(guildId);
+    const added: QueueTrack[] = [];
+
+    // Find the insert index
+    let insertIndex = 0;
+    while (
+      insertIndex < queue.tracks.length &&
+      queue.tracks[insertIndex].playNext === true
+    ) {
+      insertIndex++;
+    }
+
+    for (const input of trackInputs) {
+      const track: QueueTrack = {
+        id: input.id || randomUUID(),
+        trackId: input.trackId,
+        name: input.name,
+        path: input.path,
+        duration: input.duration,
+        addedBy: input.addedBy,
+        userId: input.userId,
+        artist: input.artist,
+        album: input.album,
+        thumbnailUrl: input.thumbnailUrl,
+        sourceProvider: input.sourceProvider,
+        sourceUrl: input.sourceUrl,
+        source: input.source,
+        artwork: input.artwork,
+        playNext: true,
+      };
+      queue.tracks.splice(insertIndex, 0, track);
+      added.push(track);
+      insertIndex++;
+      this.logger.info(
+        { guildId, trackId: track.id, name: track.name, position: insertIndex },
+        '[QUEUE] Added track to play next: %s at position %d',
+        track.name,
+        insertIndex,
+      );
+    }
+
+    if (added.length > 0) {
+      this.notifyChange(guildId);
+    }
+    return added;
+  }
+
+  /**
    * Add multiple tracks to the end of the guild's queue in the given order.
    */
   addTracks(
@@ -111,10 +217,12 @@ export class QueueManager {
     for (const input of trackInputs) {
       const track: QueueTrack = {
         id: input.id || randomUUID(),
+        trackId: input.trackId,
         name: input.name,
         path: input.path,
         duration: input.duration,
         addedBy: input.addedBy,
+        userId: input.userId,
         artist: input.artist,
         album: input.album,
         thumbnailUrl: input.thumbnailUrl,
@@ -122,6 +230,7 @@ export class QueueManager {
         sourceUrl: input.sourceUrl,
         source: input.source,
         artwork: input.artwork,
+        playNext: input.playNext,
       };
       queue.tracks.push(track);
       added.push(track);
@@ -241,6 +350,7 @@ export class QueueManager {
       sourceProvider: track.sourceProvider,
       source: track.source,
       artwork: track.artwork,
+      playNext: track.playNext,
     }));
   }
 

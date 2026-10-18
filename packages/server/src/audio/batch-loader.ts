@@ -150,6 +150,7 @@ export async function enqueueFolder(
   folderInput: string,
   queueManager: QueueManager,
   addedBy?: string,
+  options?: { playNext?: boolean },
 ): Promise<QueueTrack[]> {
   const scanned = await scanFolderForAudio(folderInput);
   if (scanned.length === 0) {
@@ -181,11 +182,14 @@ export async function enqueueFolder(
         album,
         sourceProvider: 'local',
         addedBy,
+        playNext: options?.playNext,
       };
     }),
   );
 
-  return queueManager.addTracks(guildId, trackInputs);
+  return options?.playNext
+    ? queueManager.addTracksNext(guildId, trackInputs)
+    : queueManager.addTracks(guildId, trackInputs);
 }
 
 /**
@@ -196,6 +200,7 @@ export async function enqueueMultipleFiles(
   fileInputs: string[],
   queueManager: QueueManager,
   addedBy?: string,
+  options?: { playNext?: boolean },
 ): Promise<QueueTrack[]> {
   if (fileInputs.length === 0) {
     return [];
@@ -206,6 +211,7 @@ export async function enqueueMultipleFiles(
     path: string;
     duration?: number;
     addedBy?: string;
+    playNext?: boolean;
   }> = [];
 
   for (const input of fileInputs) {
@@ -242,8 +248,11 @@ export async function enqueueMultipleFiles(
       path: relativePath,
       duration,
       addedBy,
+      playNext: options?.playNext,
     });
   }
 
-  return queueManager.addTracks(guildId, validatedInputs);
+  return options?.playNext
+    ? queueManager.addTracksNext(guildId, validatedInputs)
+    : queueManager.addTracks(guildId, validatedInputs);
 }

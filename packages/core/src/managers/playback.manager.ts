@@ -596,6 +596,7 @@ export class PlaybackManager {
       userId?: string;
       trackId?: string;
     },
+    options: { playNext?: boolean } = {},
   ): Promise<{ status: 'started' | 'queued'; track: QueueTrack; position?: number }> {
     const adapter = this.ensureAdapter();
     const playerStatus = adapter.getPlaybackStatus(guildId);
@@ -615,12 +616,19 @@ export class PlaybackManager {
       artwork: metadata.artwork,
       addedBy: metadata.addedBy,
       userId: metadata.userId,
+      playNext: options.playNext,
     };
 
     // If already playing or paused, add to queue
     if (playerStatus === 'PLAYING' || playerStatus === 'PAUSED') {
-      this.queueManager.addTrack(guildId, track);
-      const position = this.queueManager.getQueueLength(guildId);
+      let position: number;
+      if (options.playNext) {
+        const added = this.queueManager.addTrackNext(guildId, track);
+        position = added.position;
+      } else {
+        this.queueManager.addTrack(guildId, track);
+        position = this.queueManager.getQueueLength(guildId);
+      }
       this.emitQueueUpdate(guildId);
       return { status: 'queued', track, position };
     }
@@ -647,6 +655,17 @@ export class PlaybackManager {
     await adapter.play(guildId, source, playOptions);
     this.emitQueueUpdate(guildId);
     return { status: 'started', track };
+  }
+
+  /**
+   * Play a track next: plays immediately if nothing is playing, or enqueues at the top of the queue.
+   */
+  async playNext(
+    guildId: string,
+    source: AudioSource,
+    metadata: Parameters<PlaybackManager['play']>[2],
+  ): Promise<{ status: 'started' | 'queued'; track: QueueTrack; position?: number }> {
+    return this.play(guildId, source, metadata, { playNext: true });
   }
 
   /**

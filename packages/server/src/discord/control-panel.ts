@@ -66,6 +66,7 @@ const EMOJI = {
   DISCONNECT: '🚪',
   MUSIC: '🎵',
   ADD: '➕',
+  PLAYNEXT: '⏩',
   CLEAR: '🧹',
 } as const;
 
@@ -179,7 +180,8 @@ function buildPanelEmbed(
     const queueStr = preview
       .map((item) => {
         const dur = item.duration ? ` \`[${formatDuration(item.duration)}]\`` : '';
-        return `\`${item.position}.\` ${item.name}${dur}`;
+        const nextTag = item.playNext ? ' `[NEXT]`' : '';
+        return `\`${item.position}.\`${nextTag} ${item.name}${dur}`;
       })
       .join('\n');
 
@@ -231,14 +233,14 @@ function buildComponentRows(
       .setStyle(ButtonStyle.Primary)
       .setDisabled(!hasTrack && queueLength === 0),
     new ButtonBuilder()
-      .setCustomId('gakki:stop')
-      .setEmoji(EMOJI.STOP)
-      .setStyle(ButtonStyle.Danger)
-      .setDisabled(!hasTrack && state.voiceState === 'DISCONNECTED'),
-    new ButtonBuilder()
       .setCustomId('gakki:search')
       .setEmoji(EMOJI.ADD)
-      .setLabel('Play Song')
+      .setLabel('Play')
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId('gakki:playnext')
+      .setEmoji(EMOJI.PLAYNEXT)
+      .setLabel('Play Next')
       .setStyle(ButtonStyle.Success),
   );
 
@@ -477,11 +479,11 @@ function buildComponentRows(
       .setLabel(`Queue (${queueLength})`)
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
-      .setCustomId('gakki:clear_queue')
-      .setEmoji(EMOJI.CLEAR)
-      .setLabel('Clear')
+      .setCustomId('gakki:stop')
+      .setEmoji(EMOJI.STOP)
+      .setLabel('Stop')
       .setStyle(ButtonStyle.Danger)
-      .setDisabled(queueLength === 0),
+      .setDisabled(!hasTrack && state.voiceState === 'DISCONNECTED'),
     new ButtonBuilder()
       .setCustomId('gakki:disconnect')
       .setEmoji(EMOJI.DISCONNECT)
@@ -753,6 +755,28 @@ export async function handleControlPanelButton(
           .setCustomId('gakki:play_input')
           .setLabel('Song title, artist, URL, or local file')
           .setPlaceholder('e.g. Faded Alan Walker, https://soundcloud.com/..., track.mp3')
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+          .setMaxLength(300);
+
+        modal.addComponents(
+          new ActionRowBuilder<TextInputBuilder>().addComponents(inputField),
+        );
+
+        await interaction.showModal(modal);
+        return;
+      }
+
+      // ── Play Next Modal ───────────────────────────────────────────
+      case 'gakki:playnext': {
+        const modal = new ModalBuilder()
+          .setCustomId('gakki:playnext_modal')
+          .setTitle('⏩ Play Next (Top of Queue)');
+
+        const inputField = new TextInputBuilder()
+          .setCustomId('gakki:playnext_input')
+          .setLabel('Song title, artist, URL, or local file')
+          .setPlaceholder('Song to play right after current track')
           .setStyle(TextInputStyle.Short)
           .setRequired(true)
           .setMaxLength(300);
@@ -1076,9 +1100,10 @@ export async function handleControlPanelSelectMenu(
 export async function handleControlPanelModal(
   interaction: ModalSubmitInteraction,
 ): Promise<string | null> {
-  if (interaction.customId !== 'gakki:play_modal') return null;
+  if (interaction.customId !== 'gakki:play_modal' && interaction.customId !== 'gakki:playnext_modal') return null;
 
-  const input = interaction.fields.getTextInputValue('gakki:play_input')?.trim();
+  const fieldId = interaction.customId === 'gakki:playnext_modal' ? 'gakki:playnext_input' : 'gakki:play_input';
+  const input = interaction.fields.getTextInputValue(fieldId)?.trim();
   if (!input) {
     await interaction.reply({ content: 'Please provide a song name, URL, or local file.', ephemeral: true });
     return null;
