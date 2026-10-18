@@ -80,8 +80,10 @@ function App() {
           if (dData.guilds && Array.isArray(dData.guilds)) {
             setDiscordGuilds(dData.guilds);
             if (!selectedGuildId && !targetGuildId && dData.guilds.length > 0) {
-              const activeWithVoice = dData.guilds.find((g: DiscordGuild) => g.botInVoice);
-              setSelectedGuildId(activeWithVoice ? activeWithVoice.id : dData.guilds[0].id);
+              const playingGuild = dData.guilds.find((g: any) => g.playerState === 'PLAYING');
+              const voiceGuild = dData.guilds.find((g: any) => g.botInVoice);
+              const bestGuild = playingGuild || voiceGuild || dData.guilds[0];
+              setSelectedGuildId(bestGuild.id);
             }
           }
           if (dData.inviteUrl) {
@@ -101,6 +103,9 @@ function App() {
         const active = pData.primary || pData;
         if (active) {
           setPlayback(active);
+          if (!selectedGuildId && active.guildId) {
+            setSelectedGuildId(active.guildId);
+          }
           const gid = targetGuildId || selectedGuildId || active.guildId || 'web-dashboard';
           if (gid) {
             const [qRes, sRes] = await Promise.all([
@@ -162,8 +167,9 @@ function App() {
           const msg = JSON.parse(event.data);
           if (msg.type === 'playback_state' && msg.payload) {
             setPlayback(msg.payload);
-            if (msg.payload.guildId) {
-              refreshAuthoritativeState(msg.payload.guildId);
+            const targetGid = msg.payload.guildId || guildId;
+            if (targetGid) {
+              refreshAuthoritativeState(targetGid);
             }
           } else if (msg.type === 'queue.updated') {
             setQueueState({
@@ -180,6 +186,21 @@ function App() {
               loopMode: msg.loopMode ?? prev.loopMode,
               stayInChannel: msg.stayInChannel ?? prev.stayInChannel,
             }));
+          } else if (
+            msg.type === 'playback.started' ||
+            msg.type === 'playback.paused' ||
+            msg.type === 'playback.resumed' ||
+            msg.type === 'playback.ended' ||
+            msg.type === 'playback.stopped' ||
+            msg.type === 'playback.skipped' ||
+            msg.type === 'track.started' ||
+            msg.type === 'track.ended'
+          ) {
+            const targetGid = msg.guildId || guildId;
+            if (msg.type === 'playback.started' && msg.guildId && !selectedGuildId) {
+              setSelectedGuildId(msg.guildId);
+            }
+            refreshAuthoritativeState(targetGid);
           }
         } catch {
           // ignore
@@ -352,7 +373,7 @@ function App() {
               >
                 {discordGuilds.map((g) => (
                   <option key={g.id} value={g.id}>
-                    {g.name} {g.botInVoice ? `🔊 (${g.voiceChannelName || 'Voice'})` : ''}
+                    {g.name} {(g as any).playerState === 'PLAYING' ? '▶ (Playing)' : g.botInVoice ? `🔊 (${g.voiceChannelName || 'Voice'})` : ''}
                   </option>
                 ))}
               </select>

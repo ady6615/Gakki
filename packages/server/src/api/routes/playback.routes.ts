@@ -261,6 +261,20 @@ export function playbackRoutes(manager?: PlaybackManager | AudioPlayerManager): 
   });
 
   /**
+   * POST /api/playback/:guildId/stop
+   * Stop playback and clear current track.
+   */
+  router.post('/:guildId/stop', (req, res) => {
+    const { guildId } = req.params;
+    if (!activePlaybackManager) {
+      res.status(503).json({ success: false, error: 'Playback manager not initialized' });
+      return;
+    }
+    const stopped = activePlaybackManager.stop(guildId);
+    res.json({ success: true, stopped });
+  });
+
+  /**
    * POST /api/playback/:guildId/skip
    * Skip current track.
    */

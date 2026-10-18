@@ -36,6 +36,12 @@ export function NowPlayingCard({
   onRefreshSettings,
 }: NowPlayingCardProps) {
   const activeTrack = queueState.currentTrack || playback.track;
+  const trackTitle = activeTrack?.name || (activeTrack as any)?.title || 'No Track Playing';
+  const trackArtist = activeTrack?.artist || 'Unknown Artist';
+  const trackAlbum = activeTrack?.album || '';
+  const trackArtwork = activeTrack?.artwork || (activeTrack as any)?.thumbnailUrl || (activeTrack as any)?.thumbnail || null;
+  const duration = activeTrack?.duration || 0;
+
   const isPlaying = playback.playerState === 'PLAYING';
   const isPaused = playback.playerState === 'PAUSED';
 
@@ -43,12 +49,16 @@ export function NowPlayingCard({
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [isFavorite, setIsFavorite] = useState(false);
   const [volume, setVolume] = useState(settings.volume);
+  const [prevVolume, setPrevVolume] = useState(settings.volume || 100);
   const [transition, setTransition] = useState<TransitionVisualState>({ state: 'idle' });
   const [actionLoading, setActionLoading] = useState(false);
 
   // Sync volume from settings
   useEffect(() => {
     setVolume(settings.volume);
+    if (settings.volume > 0) {
+      setPrevVolume(settings.volume);
+    }
   }, [settings.volume]);
 
   // Check if current track is favorited
@@ -72,22 +82,22 @@ export function NowPlayingCard({
   // Progress ticker: resets when track changes, increments every second when PLAYING
   useEffect(() => {
     setElapsedSeconds(0);
-  }, [activeTrack?.name]);
+  }, [trackTitle]);
 
   useEffect(() => {
     if (!isPlaying) return;
     const interval = setInterval(() => {
       setElapsedSeconds((prev) => {
-        if (activeTrack?.duration && prev >= activeTrack.duration) {
+        if (duration && prev >= duration) {
           return prev;
         }
         return prev + 1;
       });
     }, 1000);
     return () => clearInterval(interval);
-  }, [isPlaying, activeTrack?.duration]);
+  }, [isPlaying, duration]);
 
-  // Listen to WebSocket events for DJ transitions
+  // Listen to WebSocket events for DJ transitions & live position ticks
   useEffect(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     let ws: WebSocket | null = null;
@@ -99,34 +109,20 @@ export function NowPlayingCard({
           if (msg.type === 'dj.transition.planned' || msg.type === 'transition.planned') {
             setTransition({
               state: 'preparing',
-              strategy: msg.strategy || msg.plan?.strategy || 'Smart Transition',
-              fromTrack: msg.fromTrackName || activeTrack?.name,
-              toTrack: msg.toTrackName || 'Next Track',
-              bpmChange: msg.bpmChange || (msg.fromBpm && msg.toBpm ? `${Math.round(msg.fromBpm)} BPM → ${Math.round(msg.toBpm)} BPM` : undefined),
-              keyChange: msg.keyChange || (msg.fromKey && msg.toKey ? `${msg.fromKey} → ${msg.toKey}` : undefined),
+              strategy: msg.strategy,
+              fromTrack: msg.fromTrack,
+              toTrack: msg.toTrack,
+              bpmChange: msg.bpmChange,
+              keyChange: msg.keyChange,
             });
           } else if (msg.type === 'dj.transition.started' || msg.type === 'transition.started') {
-            setTransition((prev) => ({
-              ...prev,
-              state: 'mixing',
-              strategy: msg.strategy || prev.strategy || 'Stem Crossfade',
-            }));
-          } else if (msg.type === 'dj.transition.progress') {
-            setTransition((prev) => ({
-              ...prev,
-              state: 'mixing',
-              progress: msg.progress,
-            }));
+            setTransition((prev) => ({ ...prev, state: 'mixing', progress: 0 }));
           } else if (msg.type === 'dj.transition.completed' || msg.type === 'transition.completed') {
             setTransition({ state: 'idle' });
           } else if (msg.type === 'dj.transition.fallback' || msg.type === 'transition.fallback') {
-            setTransition((prev) => ({
-              ...prev,
-              state: 'fallback',
-              strategy: `Fallback: ${msg.reason || 'Equal-power Crossfade'}`,
-            }));
-            setTimeout(() => setTransition({ state: 'idle' }), 5000);
-          } else if (msg.type === 'playback.seeked') {
+            setTransition({ state: 'fallback', strategy: msg.reason });
+            setTimeout(() => setTransition({ state: 'idle' }), 4000);
+          } else if (msg.type === 'playback.position') {
             if (typeof msg.positionSeconds === 'number') {
               setElapsedSeconds(msg.positionSeconds);
             }
@@ -141,7 +137,7 @@ export function NowPlayingCard({
     return () => {
       if (ws) ws.close();
     };
-  }, [activeTrack?.name]);
+  }, [trackTitle]);
 
   // Controls handlers
   const handlePlayPause = async () => {
@@ -152,6 +148,23 @@ export function NowPlayingCard({
         ? `/api/playback/${guildId}/pause`
         : `/api/playback/${guildId}/resume`;
       await fetch(endpoint, { method: 'POST' });
+      onRefreshQueue?.();
+      onRefreshSettings?.();
+    } catch {
+      // ignore
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleStop = async () => {
+    if (!guildId) return;
+    setActionLoading(true);
+    try {
+      await fetch(`/api/playback/${guildId}/stop`, { method: 'POST' });
+      setElapsedSeconds(0);
+      onRefreshQueue?.();
+      onRefreshSettings?.();
     } catch {
       // ignore
     } finally {
@@ -164,11 +177,27 @@ export function NowPlayingCard({
     setActionLoading(true);
     try {
       await fetch(`/api/playback/${guildId}/skip`, { method: 'POST' });
+      setElapsedSeconds(0);
       onRefreshQueue?.();
+      onRefreshSettings?.();
     } catch {
       // ignore
     } finally {
       setActionLoading(false);
+    }
+  };
+
+  const handleRestart = async () => {
+    await handleSeek(0, false);
+  };
+
+  const handleShuffle = async () => {
+    if (!guildId) return;
+    try {
+      await fetch(`/api/playback/${guildId}/shuffle`, { method: 'POST' });
+      onRefreshQueue?.();
+    } catch {
+      // ignore
     }
   };
 
@@ -194,12 +223,29 @@ export function NowPlayingCard({
   const handleVolumeChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const newVol = Number(e.target.value);
     setVolume(newVol);
+    if (newVol > 0) setPrevVolume(newVol);
     if (!guildId) return;
     try {
       await fetch(`/api/playback/${guildId}/volume`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ volume: newVol }),
+      });
+      onRefreshSettings?.();
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleToggleMute = async () => {
+    if (!guildId) return;
+    const nextVol = volume > 0 ? 0 : (prevVolume > 0 ? prevVolume : 100);
+    setVolume(nextVol);
+    try {
+      await fetch(`/api/playback/${guildId}/volume`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ volume: nextVol }),
       });
       onRefreshSettings?.();
     } catch {
@@ -228,7 +274,7 @@ export function NowPlayingCard({
     try {
       const current = elapsedSeconds;
       const target = relative ? Math.max(0, current + seconds) : Math.max(0, seconds);
-      const clamped = activeTrack.duration ? Math.min(target, Math.max(0, activeTrack.duration - 2)) : target;
+      const clamped = duration ? Math.min(target, Math.max(0, duration - 2)) : target;
       setElapsedSeconds(clamped);
 
       await fetch(`/api/playback/${guildId}/seek`, {
@@ -241,7 +287,6 @@ export function NowPlayingCard({
     }
   };
 
-  const duration = activeTrack?.duration || 0;
   const progressPercent = duration > 0 ? Math.min(100, (elapsedSeconds / duration) * 100) : 0;
 
   return (
@@ -250,7 +295,7 @@ export function NowPlayingCard({
       <div className="card-top-bar">
         <span className="card-badge">
           <span className={`status-indicator-dot ${isPlaying ? 'pulse' : ''}`} />
-          {playback.playerState}
+          {playback.playerState || 'IDLE'}
         </span>
         <button
           className={`favorite-btn ${isFavorite ? 'favorited' : ''}`}
@@ -269,17 +314,17 @@ export function NowPlayingCard({
           <div className={`vinyl-disc ${isPlaying ? 'spinning' : isPaused ? 'paused' : ''}`}>
             <div className="vinyl-grooves" />
             <div className="vinyl-label">
-              {activeTrack?.artwork ? (
-                <img src={activeTrack.artwork} alt="" className="vinyl-artwork" />
+              {trackArtwork ? (
+                <img src={trackArtwork} alt="" className="vinyl-artwork" />
               ) : (
                 <span className="vinyl-icon">🎵</span>
               )}
             </div>
           </div>
-          {activeTrack?.artwork && (
+          {trackArtwork && (
             <img
-              src={activeTrack.artwork}
-              alt={activeTrack.name}
+              src={trackArtwork}
+              alt={trackTitle}
               className="album-art-underlay"
               onError={(e) => {
                 e.currentTarget.style.display = 'none';
@@ -289,12 +334,12 @@ export function NowPlayingCard({
         </div>
 
         <div className="track-text-details">
-          <h2 className="now-playing-title" title={activeTrack?.name || 'No Track Playing'}>
-            {activeTrack?.name || 'No Track Playing'}
+          <h2 className="now-playing-title" title={trackTitle}>
+            {trackTitle}
           </h2>
           <p className="now-playing-artist">
-            {activeTrack?.artist || 'Unknown Artist'}
-            {activeTrack?.album && <span className="album-pill"> • {activeTrack.album}</span>}
+            {trackArtist}
+            {trackAlbum && <span className="album-pill"> • {trackAlbum}</span>}
           </p>
           {activeTrack?.source && (
             <span className={`source-badge source-${activeTrack.source}`}>
@@ -308,7 +353,7 @@ export function NowPlayingCard({
         </div>
       </div>
 
-      {/* Transition Visualization Banner (Requirement 18) */}
+      {/* Transition Visualization Banner */}
       {transition.state !== 'idle' && (
         <div className={`transition-banner transition-${transition.state}`} role="status">
           <div className="transition-header">
@@ -321,7 +366,7 @@ export function NowPlayingCard({
             <span className="transition-strategy">{transition.strategy}</span>
           </div>
           <div className="transition-flow">
-            <span className="flow-track current">{transition.fromTrack || activeTrack?.name || 'Current'}</span>
+            <span className="flow-track current">{transition.fromTrack || trackTitle}</span>
             <span className="flow-arrow">⬇</span>
             <span className="flow-track next">{transition.toTrack || 'Next'}</span>
           </div>
@@ -441,15 +486,16 @@ export function NowPlayingCard({
         </div>
       </div>
 
-      {/* Playback Controls (Requirement 17) */}
+      {/* Main Playback Controls */}
       <div className="playback-controls-row">
         <button
           className="control-btn"
-          onClick={handleLoopToggle}
-          aria-label={`Loop mode: ${settings.loopMode}`}
-          title={`Loop: ${settings.loopMode.toUpperCase()}`}
+          onClick={handleRestart}
+          disabled={!activeTrack || actionLoading}
+          aria-label="Restart song"
+          title="Restart song (0:00)"
         >
-          {settings.loopMode === 'track' ? '🔂' : settings.loopMode === 'queue' ? '🔁' : '➡️'}
+          ⏮
         </button>
 
         <button
@@ -463,18 +509,55 @@ export function NowPlayingCard({
         </button>
 
         <button
+          className="control-btn"
+          onClick={handleStop}
+          disabled={actionLoading || (!isPlaying && !isPaused)}
+          aria-label="Stop playback"
+          title="Stop playback"
+        >
+          ⏹
+        </button>
+
+        <button
           className="control-btn skip-btn"
           onClick={handleSkip}
           disabled={actionLoading || !activeTrack}
           aria-label="Skip to next track"
-          title="Skip"
+          title="Skip to next track"
         >
           ⏭
         </button>
 
-        {/* Volume Slider */}
+        <button
+          className={`control-btn ${settings.loopMode !== 'off' ? 'active-mode' : ''}`}
+          onClick={handleLoopToggle}
+          aria-label={`Loop mode: ${settings.loopMode}`}
+          title={`Loop: ${settings.loopMode.toUpperCase()}`}
+        >
+          {settings.loopMode === 'track' ? '🔂' : settings.loopMode === 'queue' ? '🔁' : '➡️'}
+        </button>
+
+        <button
+          className="control-btn"
+          onClick={handleShuffle}
+          disabled={!queueState.queue || queueState.queue.length <= 1}
+          aria-label="Shuffle queue"
+          title="Shuffle remaining queue"
+        >
+          🔀
+        </button>
+
+        {/* Volume & Mute Control */}
         <div className="volume-control-box" title={`Volume: ${volume}%`}>
-          <span className="volume-icon">{volume === 0 ? '🔇' : volume < 50 ? '🔉' : '🔊'}</span>
+          <button
+            type="button"
+            className="volume-mute-btn"
+            onClick={handleToggleMute}
+            aria-label={volume === 0 ? 'Unmute volume' : 'Mute volume'}
+            title={volume === 0 ? 'Unmute' : 'Mute'}
+          >
+            {volume === 0 ? '🔇' : volume < 50 ? '🔉' : '🔊'}
+          </button>
           <input
             type="range"
             min={0}

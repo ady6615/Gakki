@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState } from 'react';
 
 export interface LyricLine {
   timeMs: number;
@@ -36,11 +36,6 @@ export function LyricsPanel({
   // Synced playback position (seconds)
   const [currentPositionSec, setCurrentPositionSec] = useState(0);
   const [activeLineIndex, setActiveLineIndex] = useState(-1);
-  const [autoScroll, setAutoScroll] = useState(true);
-
-  const containerRef = useRef<HTMLDivElement>(null);
-  const lineRefs = useRef<(HTMLDivElement | null)[]>([]);
-  const isUserScrollingRef = useRef(false);
 
   // Fetch lyrics when track changes
   useEffect(() => {
@@ -54,7 +49,6 @@ export function LyricsPanel({
     setError(null);
     setCurrentPositionSec(0);
     setActiveLineIndex(-1);
-    setAutoScroll(true);
 
     const queryParams = new URLSearchParams();
     if (trackTitle) queryParams.set('title', trackTitle);
@@ -139,6 +133,30 @@ export function LyricsPanel({
     return () => clearInterval(interval);
   }, [isPlaying, trackDuration]);
 
+  // Listen to WebSocket position updates if available
+  useEffect(() => {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    let ws: WebSocket | null = null;
+    try {
+      ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'playback.position' && typeof msg.positionSeconds === 'number') {
+            setCurrentPositionSec(msg.positionSeconds);
+          }
+        } catch {
+          // ignore
+        }
+      };
+    } catch {
+      // ignore
+    }
+    return () => {
+      if (ws) ws.close();
+    };
+  }, [trackTitle]);
+
   // Find active lyric line based on current position
   useEffect(() => {
     if (!lyricsData?.synced || !lyricsData.lines || lyricsData.lines.length === 0) {
@@ -149,7 +167,7 @@ export function LyricsPanel({
     const currentMs = currentPositionSec * 1000;
     const lines = lyricsData.lines;
 
-    // Find the latest line whose timestamp is <= currentMs
+    // Find the latest line whose timestamp is <= currentMs + 200ms grace window
     let idx = -1;
     for (let i = 0; i < lines.length; i++) {
       if (lines[i].timeMs <= currentMs + 200) {
@@ -158,84 +176,33 @@ export function LyricsPanel({
         break;
       }
     }
-
-    if (idx !== activeLineIndex) {
-      setActiveLineIndex(idx);
-    }
-  }, [currentPositionSec, lyricsData, activeLineIndex]);
-
-  // Auto-scroll to active line if autoScroll is enabled
-  useEffect(() => {
-    if (!autoScroll || activeLineIndex < 0) return;
-    const targetEl = lineRefs.current[activeLineIndex];
-    if (targetEl && containerRef.current) {
-      targetEl.scrollIntoView({
-        behavior: 'smooth',
-        block: 'center',
-      });
-    }
-  }, [activeLineIndex, autoScroll]);
-
-  // Detect manual user scroll to pause auto-scroll (Requirement 5)
-  const handleScroll = () => {
-    if (!containerRef.current) return;
-    // If the user triggered the scroll manually, disable auto-scroll
-    if (!isUserScrollingRef.current) {
-      // This allows user to freely read ahead without screen jumping back
-      setAutoScroll(false);
-    }
-  };
-
-  const resumeSync = () => {
-    setAutoScroll(true);
-    if (activeLineIndex >= 0 && lineRefs.current[activeLineIndex]) {
-      lineRefs.current[activeLineIndex]?.scrollIntoView({
-        behavior: 'smooth',
-        block: 'center',
-      });
-    }
-  };
-
-  // Jump position when clicking a lyric line
-  const handleLineClick = (index: number) => {
-    if (lyricsData?.lines && lyricsData.lines[index]) {
-      const lineMs = lyricsData.lines[index].timeMs;
-      setCurrentPositionSec(lineMs / 1000);
-      setActiveLineIndex(index);
-      setAutoScroll(true);
-    }
-  };
+    setActiveLineIndex(idx);
+  }, [currentPositionSec, lyricsData]);
 
   const lines = lyricsData?.lines || [];
   const prevLine = activeLineIndex > 0 ? lines[activeLineIndex - 1]?.text : null;
   const currentLine = activeLineIndex >= 0 ? lines[activeLineIndex]?.text : null;
-  const nextLine = activeLineIndex >= 0 && activeLineIndex < lines.length - 1 ? lines[activeLineIndex + 1]?.text : null;
+  const nextLine =
+    activeLineIndex >= 0 && activeLineIndex < lines.length - 1
+      ? lines[activeLineIndex + 1]?.text
+      : null;
 
   return (
     <section className="lyrics-panel glass-panel" aria-label="Synchronized Song Lyrics">
+      {/* Header */}
       <div className="lyrics-header">
         <div className="lyrics-header-left">
           <h3 className="lyrics-title">
-            <span className="lyrics-icon">🎤</span> Lyrics
+            <span className="lyrics-icon">🎤</span> Lyrics Focus
           </h3>
           {lyricsData && (
             <span className="lyrics-badge">
-              {lyricsData.synced ? '⚡ Synced' : '📄 Plain Text'}
+              {lyricsData.synced ? '⚡ Synced Live' : '📄 Plain Text'}
               {lyricsData.providerName && ` • ${lyricsData.providerName}`}
               {lyricsData.confidence != null && ` (${Math.round(lyricsData.confidence * 100)}% match)`}
             </span>
           )}
         </div>
-
-        {lyricsData?.synced && !autoScroll && (
-          <button
-            className="resume-sync-btn"
-            onClick={resumeSync}
-            aria-label="Resume synchronized auto-scroll"
-          >
-            ▶ Resume Auto-Scroll
-          </button>
-        )}
       </div>
 
       {loading && (
@@ -257,7 +224,7 @@ export function LyricsPanel({
         </div>
       )}
 
-      {/* Synchronized 3-line Excerpt Focus View (Requirement 3 & 5) */}
+      {/* Synchronized 3-line Excerpt Focus View (Upper Section) */}
       {!loading && lyricsData?.synced && lines.length > 0 && (
         <div className="synced-focus-stage" aria-live="polite">
           <div className="focus-line prev-line">{prevLine || '...'}</div>
@@ -268,58 +235,27 @@ export function LyricsPanel({
         </div>
       )}
 
-      {/* Full Lyrics View */}
-      {!loading && lyricsData && (
-        <div
-          className="lyrics-scroll-box"
-          ref={containerRef}
-          onScroll={handleScroll}
-          tabIndex={0}
-          role="region"
-          aria-label="Full lyrics text"
-        >
-          {lyricsData.synced && lines.length > 0 ? (
-            <div className="synced-lines-container">
-              {lines.map((line, idx) => {
-                const isActive = idx === activeLineIndex;
-                const isPast = idx < activeLineIndex;
-                return (
-                  <div
-                    key={`${line.timeMs}-${idx}`}
-                    ref={(el) => (lineRefs.current[idx] = el)}
-                    className={`lyric-line ${isActive ? 'active' : ''} ${isPast ? 'past' : ''}`}
-                    onClick={() => handleLineClick(idx)}
-                    role="button"
-                    tabIndex={0}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') handleLineClick(idx);
-                    }}
-                    aria-label={`${line.text} at ${Math.floor(line.timeMs / 1000)} seconds`}
-                  >
-                    <span className="line-time">
-                      {Math.floor(line.timeMs / 60000)}:
-                      {Math.floor((line.timeMs % 60000) / 1000).toString().padStart(2, '0')}
-                    </span>
-                    <span className="line-text">{line.text || '♪ ♪ ♪'}</span>
-                  </div>
-                );
-              })}
-            </div>
-          ) : (
-            <div className="plain-lyrics-view">
-              <pre className="plain-lyrics-content">
-                {typeof lyricsData.lyrics === 'string' && lyricsData.lyrics.trim().length > 0
-                  ? lyricsData.lyrics
-                  : 'Lyrics unavailable for this track.'}
-              </pre>
-            </div>
-          )}
+      {/* Plain text preview for unsynced tracks (Upper Section) */}
+      {!loading && lyricsData && !lyricsData.synced && lyricsData.lyrics && (
+        <div className="synced-focus-stage plain-focus-stage" aria-live="polite">
+          <div className="plain-lyrics-preview">
+            {lyricsData.lyrics
+              .split('\n')
+              .filter((l) => l.trim().length > 0)
+              .slice(0, 4)
+              .map((line, idx) => (
+                <div key={idx} className={`focus-line ${idx === 0 ? 'current-line-highlight' : ''}`}>
+                  {line}
+                </div>
+              ))}
+          </div>
+        </div>
+      )}
 
-          {lyricsData.sourceAttribution && (
-            <div className="lyrics-attribution">
-              Source: {lyricsData.sourceAttribution}
-            </div>
-          )}
+      {/* Source Attribution */}
+      {lyricsData?.sourceAttribution && !loading && (
+        <div className="lyrics-attribution">
+          Source: {lyricsData.sourceAttribution}
         </div>
       )}
     </section>

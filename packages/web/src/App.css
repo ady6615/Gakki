@@ -2225,6 +2225,7 @@ body {
   padding: 1.5rem;
   display: flex;
   flex-direction: column;
+  justify-content: space-between;
   height: 100%;
   min-height: 480px;
   min-width: 0;
@@ -2235,7 +2236,7 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 1rem;
+  margin-bottom: 1.25rem;
   gap: 0.75rem;
   min-width: 0;
 }
@@ -2255,8 +2256,11 @@ body {
 }
 
 .lyrics-badge {
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   color: #a78bfa;
+  background: rgba(124, 92, 252, 0.12);
+  padding: 0.2rem 0.5rem;
+  border-radius: 6px;
   margin-left: 0.5rem;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2283,19 +2287,25 @@ body {
 }
 
 .synced-focus-stage {
-  background: rgba(0, 0, 0, 0.3);
-  border-radius: 8px;
-  padding: 0.8rem;
-  margin-bottom: 0.75rem;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  padding: 2.2rem 1.25rem;
+  margin: auto 0;
   text-align: center;
   min-width: 0;
   overflow: hidden;
+  box-shadow: inset 0 2px 12px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.9rem;
 }
 
 .focus-line {
-  font-size: 0.88rem;
+  font-size: 0.95rem;
   color: var(--text-muted);
-  min-height: 1.3rem;
+  min-height: 1.5rem;
   transition: all 0.3s ease;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2303,11 +2313,57 @@ body {
 }
 
 .focus-line.current-line-highlight {
-  font-size: 1.15rem;
+  font-size: 1.35rem;
   font-weight: 700;
   color: #fff;
-  text-shadow: 0 0 12px rgba(167, 139, 250, 0.6);
-  margin: 0.3rem 0;
+  text-shadow: 0 0 16px rgba(167, 139, 250, 0.8), 0 0 30px rgba(139, 92, 246, 0.45);
+  transform: scale(1.03);
+}
+
+.plain-focus-stage {
+  padding: 1.5rem 1rem;
+}
+
+.plain-lyrics-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.plain-lyrics-preview .focus-line {
+  white-space: normal;
+  text-overflow: initial;
+}
+
+.lyrics-attribution {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  text-align: right;
+  margin-top: 1rem;
+  opacity: 0.75;
+}
+
+.volume-mute-btn {
+  background: transparent;
+  border: none;
+  font-size: 1.15rem;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.15s ease;
+}
+
+.volume-mute-btn:hover {
+  transform: scale(1.15);
+}
+
+.control-btn.active-mode {
+  background: rgba(124, 92, 252, 0.3) !important;
+  border-color: var(--accent) !important;
+  color: #fff !important;
+  box-shadow: 0 0 10px rgba(124, 92, 252, 0.4);
 }
 
 .lyrics-scroll-box {
