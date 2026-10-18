@@ -15,6 +15,71 @@ export function normalizeSongString(str: string): string {
     .trim();
 }
 
+export interface CleanedTrackMetadata {
+  title: string;
+  artist?: string;
+  album?: string;
+  duration?: number;
+  searchQuery: string;
+}
+
+/**
+ * Sanitizes raw titles (e.g. from YouTube, local filenames, or dirty metadata):
+ * - Strips file extensions (.mp3, .flac, etc.)
+ * - Strips track numbers at start (01 -, 01. )
+ * - Strips YouTube/MV bracketed tags [Official Music Video], (Lyrics), etc.
+ * - Extracts "Artist - Title" if artist is omitted
+ */
+export function cleanTrackMetadata(track: TrackMetadataForLyrics): CleanedTrackMetadata {
+  let rawTitle = (track.title || '').trim();
+  let artist = (track.artist || '').trim();
+  const album = (track.album || '').trim();
+  const duration = track.duration && track.duration > 0 ? track.duration : undefined;
+
+  // 1. Strip file extensions
+  let title = rawTitle.replace(/\.(mp3|wav|flac|m4a|ogg|opus|aac|webm|wma)$/i, '');
+
+  // 2. Strip leading track numbering e.g. "01 - ", "01. "
+  title = title.replace(/^(\d{1,3}[\s.\-_]+)+/, '');
+
+  // 3. Strip common video/audio suffixes & bracketed tags
+  title = title
+    .replace(/\s*[\(\[]\s*(?:official\s+(?:music\s+)?video|official\s+audio|official|lyrics?|lyric\s+video|visualizer|audio|audio\s+track|mv|hd|4k|remaster(?:ed)?(?:\s+\d+)?|live(?:\s+at[^)\]]*)?|cover|slowed(?:\s+\+\s+reverb)?|sped\s+up|full\s+song)[\)\]]/gi, '')
+    .replace(/\s*[\(\[]\s*(?:320\s*kbps|flac|hq|1080p|720p)[\)\]]/gi, '');
+
+  // 4. Handle "Artist - Title" pattern
+  const dashMatch = title.match(/^(.+?)\s+[-–—]\s+(.+)$/);
+  if (dashMatch) {
+    const part1 = dashMatch[1].trim();
+    const part2 = dashMatch[2].trim();
+    if (!artist) {
+      artist = part1;
+      title = part2;
+    } else if (artist.toLowerCase() === part1.toLowerCase() || part1.toLowerCase().includes(artist.toLowerCase())) {
+      title = part2;
+    }
+  }
+
+  // 5. Remove featured artists from title if present (e.g. "Song (feat. Artist)" or "Song ft. Artist")
+  title = title
+    .replace(/\s*[\(\[]\s*(?:feat\.?|ft\.?)\s+[^)\]]+[\)\]]/gi, '')
+    .replace(/\s+(?:feat\.?|ft\.?)\s+.+$/i, '');
+
+  // 6. Clean quotes, brackets, and extra spaces
+  title = title.replace(/["'“”]/g, '').replace(/\s+/g, ' ').trim() || rawTitle;
+  artist = artist.replace(/["'“”]/g, '').replace(/\s+/g, ' ').trim();
+
+  const searchQuery = [artist, title].filter(Boolean).join(' ').trim();
+
+  return {
+    title,
+    artist: artist || undefined,
+    album: album || undefined,
+    duration,
+    searchQuery,
+  };
+}
+
 /**
  * Calculate similarity between two strings using bigram dice coefficient (0 to 1).
  */

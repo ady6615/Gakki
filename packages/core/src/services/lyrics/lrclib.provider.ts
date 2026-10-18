@@ -1,6 +1,10 @@
 import type { LyricsProvider, LyricsResult, TrackMetadataForLyrics } from '../../types/lyrics';
 import { parseLrcLyrics } from '../../utils/lrc-parser';
-import { computeLyricsMatchConfidence } from '../../utils/lyrics-matcher';
+import {
+  computeLyricsMatchConfidence,
+  cleanTrackMetadata,
+  type CleanedTrackMetadata,
+} from '../../utils/lyrics-matcher';
 import { createLogger } from '../../utils/logger';
 
 const logger = createLogger('lrclib-lyrics-provider');
@@ -24,7 +28,7 @@ export class LrcLibLyricsProvider implements LyricsProvider {
 
   constructor(options?: { baseUrl?: string; timeoutMs?: number }) {
     this.baseUrl = options?.baseUrl || 'https://lrclib.net/api';
-    this.timeoutMs = options?.timeoutMs || 4000;
+    this.timeoutMs = options?.timeoutMs || 5000;
   }
 
   async search(track: TrackMetadataForLyrics): Promise<LyricsResult | null> {
@@ -32,34 +36,59 @@ export class LrcLibLyricsProvider implements LyricsProvider {
       return null;
     }
 
+    const cleaned = cleanTrackMetadata(track);
+
     try {
-      // 1. Try exact get if artist is present
-      if (track.artist) {
-        const exactResult = await this.tryExactGet(track);
+      // 1. Try exact get if artist is present in cleaned metadata
+      if (cleaned.artist) {
+        const exactResult = await this.tryExactGet(cleaned, track);
         if (exactResult) {
           return exactResult;
         }
       }
 
-      // 2. Fall back to search API
-      return await this.trySearch(track);
+      // 2. Try search API with cleaned metadata (q query)
+      const searchResult = await this.trySearch(cleaned, track);
+      if (searchResult) {
+        return searchResult;
+      }
+
+      // 3. Fallback: if cleaned differed from raw title and didn't find anything, try raw title
+      if (cleaned.title !== track.title) {
+        const rawFallback: CleanedTrackMetadata = {
+          title: track.title,
+          artist: track.artist || undefined,
+          album: track.album || undefined,
+          duration: track.duration || undefined,
+          searchQuery: [track.artist, track.title].filter(Boolean).join(' '),
+        };
+        const fallbackResult = await this.trySearch(rawFallback, track);
+        if (fallbackResult) {
+          return fallbackResult;
+        }
+      }
+
+      return null;
     } catch (err: any) {
       logger.warn({ err: err?.message || String(err), title: track.title }, 'LRCLIB request failed');
       return null;
     }
   }
 
-  private async tryExactGet(track: TrackMetadataForLyrics): Promise<LyricsResult | null> {
-    const params = new URLSearchParams();
-    params.set('track_name', track.title);
-    if (track.artist) params.set('artist_name', track.artist);
-    if (track.album) params.set('album_name', track.album);
-    if (track.duration && track.duration > 0) params.set('duration', Math.round(track.duration).toString());
+  private async tryExactGet(
+    cleaned: CleanedTrackMetadata,
+    rawTrack: TrackMetadataForLyrics
+  ): Promise<LyricsResult | null> {
+    if (!cleaned.artist) return null;
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
 
     try {
+      const params = new URLSearchParams();
+      params.set('track_name', cleaned.title);
+      params.set('artist_name', cleaned.artist);
+
       const url = `${this.baseUrl}/get?${params.toString()}`;
       const res = await fetch(url, {
         headers: { 'User-Agent': 'GakkiMusicBot/1.0 (https://github.com/ady6615/Gakki)' },
@@ -71,7 +100,7 @@ export class LrcLibLyricsProvider implements LyricsProvider {
       }
 
       const data = (await res.json()) as LrcLibResponse;
-      return this.formatResult(track, data);
+      return this.formatResult(rawTrack, data);
     } catch {
       return null;
     } finally {
@@ -79,19 +108,18 @@ export class LrcLibLyricsProvider implements LyricsProvider {
     }
   }
 
-  private async trySearch(track: TrackMetadataForLyrics): Promise<LyricsResult | null> {
-    const params = new URLSearchParams();
-    if (track.artist) {
-      params.set('track_name', track.title);
-      params.set('artist_name', track.artist);
-    } else {
-      params.set('q', track.title);
-    }
-
+  private async trySearch(
+    cleaned: CleanedTrackMetadata,
+    rawTrack: TrackMetadataForLyrics
+  ): Promise<LyricsResult | null> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
 
     try {
+      // Broad 'q' search is the most forgiving for community lrclib queries
+      const params = new URLSearchParams();
+      params.set('q', cleaned.searchQuery || cleaned.title);
+
       const url = `${this.baseUrl}/search?${params.toString()}`;
       const res = await fetch(url, {
         headers: { 'User-Agent': 'GakkiMusicBot/1.0 (https://github.com/ady6615/Gakki)' },
@@ -102,7 +130,28 @@ export class LrcLibLyricsProvider implements LyricsProvider {
         return null;
       }
 
-      const items = (await res.json()) as LrcLibResponse[];
+      let items = (await res.json()) as LrcLibResponse[];
+      if (!Array.isArray(items) || items.length === 0) {
+        // Try track_name & artist_name search if q produced no results and artist exists
+        if (cleaned.artist) {
+          const fallbackParams = new URLSearchParams();
+          fallbackParams.set('track_name', cleaned.title);
+          fallbackParams.set('artist_name', cleaned.artist);
+
+          const fallbackRes = await fetch(`${this.baseUrl}/search?${fallbackParams.toString()}`, {
+            headers: { 'User-Agent': 'GakkiMusicBot/1.0 (https://github.com/ady6615/Gakki)' },
+            signal: controller.signal,
+          });
+
+          if (fallbackRes.ok) {
+            const fallbackItems = (await fallbackRes.json()) as LrcLibResponse[];
+            if (Array.isArray(fallbackItems) && fallbackItems.length > 0) {
+              items = fallbackItems;
+            }
+          }
+        }
+      }
+
       if (!Array.isArray(items) || items.length === 0) {
         return null;
       }
@@ -112,13 +161,27 @@ export class LrcLibLyricsProvider implements LyricsProvider {
       let bestConfidence = 0;
 
       for (const item of items) {
-        if (!item.plainLyrics && !item.syncedLyrics) continue;
-        const confidence = computeLyricsMatchConfidence(track, {
+        if (!item.plainLyrics && !item.syncedLyrics && !item.instrumental) continue;
+
+        const candidate = {
           trackName: item.trackName || item.name || '',
           artistName: item.artistName,
           albumName: item.albumName,
           duration: item.duration,
-        });
+        };
+
+        const confCleaned = computeLyricsMatchConfidence(
+          {
+            title: cleaned.title,
+            artist: cleaned.artist,
+            album: cleaned.album,
+            duration: cleaned.duration,
+          },
+          candidate
+        );
+
+        const confRaw = computeLyricsMatchConfidence(rawTrack, candidate);
+        const confidence = Math.max(confCleaned, confRaw);
 
         if (confidence > bestConfidence) {
           bestConfidence = confidence;
@@ -126,12 +189,12 @@ export class LrcLibLyricsProvider implements LyricsProvider {
         }
       }
 
-      // Reject if best match confidence is below 0.4
-      if (!bestItem || bestConfidence < 0.4) {
+      // Reject if best match confidence is below 0.35
+      if (!bestItem || bestConfidence < 0.35) {
         return null;
       }
 
-      return this.formatResult(track, bestItem, bestConfidence);
+      return this.formatResult(rawTrack, bestItem, bestConfidence);
     } catch {
       return null;
     } finally {
@@ -168,14 +231,28 @@ export class LrcLibLyricsProvider implements LyricsProvider {
       ? parsedSynced.map((l) => l.text).join('\n')
       : '';
 
+    const cleaned = cleanTrackMetadata(track);
+    const candidate = {
+      trackName: data.trackName || data.name || track.title,
+      artistName: data.artistName,
+      albumName: data.albumName,
+      duration: data.duration,
+    };
+
     const confidence =
       explicitConfidence ??
-      computeLyricsMatchConfidence(track, {
-        trackName: data.trackName || data.name || track.title,
-        artistName: data.artistName,
-        albumName: data.albumName,
-        duration: data.duration,
-      });
+      Math.max(
+        computeLyricsMatchConfidence(
+          {
+            title: cleaned.title,
+            artist: cleaned.artist,
+            album: cleaned.album,
+            duration: cleaned.duration,
+          },
+          candidate
+        ),
+        computeLyricsMatchConfidence(track, candidate)
+      );
 
     return {
       plainLyrics: plain.trim(),

@@ -72,7 +72,47 @@ export function LyricsPanel({
       })
       .then((data) => {
         if (!isMounted) return;
-        setLyricsData(data);
+        if (!data) {
+          setLyricsData(null);
+          setLoading(false);
+          return;
+        }
+
+        // Defensive normalization for flat, nested, or legacy formats
+        const plain =
+          typeof data.lyrics === 'string'
+            ? data.lyrics
+            : typeof data.plainLyrics === 'string'
+            ? data.plainLyrics
+            : typeof data.lyrics?.plainLyrics === 'string'
+            ? data.lyrics.plainLyrics
+            : typeof data.data?.plainLyrics === 'string'
+            ? data.data.plainLyrics
+            : '';
+
+        const isSynced = Boolean(
+          data.synced ?? data.isSynced ?? data.lyrics?.isSynced ?? data.data?.isSynced
+        );
+
+        const lines = Array.isArray(data.lines)
+          ? data.lines
+          : Array.isArray(data.syncedLyrics)
+          ? data.syncedLyrics
+          : Array.isArray(data.lyrics?.syncedLyrics)
+          ? data.lyrics.syncedLyrics
+          : Array.isArray(data.data?.syncedLyrics)
+          ? data.data.syncedLyrics
+          : [];
+
+        setLyricsData({
+          lyrics: plain,
+          synced: isSynced && lines.length > 0,
+          lines,
+          providerName: data.providerName || data.lyrics?.providerName || data.data?.providerName,
+          sourceAttribution:
+            data.sourceAttribution || data.lyrics?.sourceAttribution || data.data?.sourceAttribution,
+          confidence: data.confidence ?? data.lyrics?.confidence ?? data.data?.confidence,
+        });
         setLoading(false);
       })
       .catch((err) => {
@@ -267,7 +307,11 @@ export function LyricsPanel({
             </div>
           ) : (
             <div className="plain-lyrics-view">
-              <pre className="plain-lyrics-content">{lyricsData.lyrics}</pre>
+              <pre className="plain-lyrics-content">
+                {typeof lyricsData.lyrics === 'string' && lyricsData.lyrics.trim().length > 0
+                  ? lyricsData.lyrics
+                  : 'Lyrics unavailable for this track.'}
+              </pre>
             </div>
           )}
 

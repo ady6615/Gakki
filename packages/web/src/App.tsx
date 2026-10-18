@@ -14,6 +14,7 @@ import { SmartDJSection } from './components/SmartDJSection';
 import { RecordingsSection } from './components/RecordingsSection';
 import { AudioRoutingSection } from './components/AudioRoutingSection';
 import { VoiceCommandSection } from './components/VoiceCommandSection';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import type {
   PlaybackStatePayload,
   QueueStatePayload,
@@ -382,6 +383,7 @@ function App() {
 
       {/* Main Content Area */}
       <main className="app-main-layout">
+        <ErrorBoundary fallbackTitle="Dashboard Page">
         {/* 1. Player & Queue Tab */}
         {activeMainTab === 'player' && (
           <div className="player-tab-layout">
@@ -394,13 +396,15 @@ function App() {
                 onRefreshQueue={() => refreshAuthoritativeState(guildId)}
                 onRefreshSettings={() => refreshAuthoritativeState(guildId)}
               />
-              <LyricsPanel
-                trackTitle={activeTrack?.name}
-                trackArtist={activeTrack?.artist}
-                trackDuration={activeTrack?.duration}
-                trackId={activeTrack?.id}
-                isPlaying={playback.playerState === 'PLAYING'}
-              />
+              <ErrorBoundary fallbackTitle="Lyrics Panel">
+                <LyricsPanel
+                  trackTitle={activeTrack?.name}
+                  trackArtist={activeTrack?.artist}
+                  trackDuration={activeTrack?.duration}
+                  trackId={activeTrack?.id}
+                  isPlaying={playback.playerState === 'PLAYING'}
+                />
+              </ErrorBoundary>
             </div>
 
             <div className="player-bottom-row">
@@ -478,6 +482,7 @@ function App() {
             <AudioRoutingSection onRefresh={() => refreshAuthoritativeState(guildId)} />
           </div>
         )}
+        </ErrorBoundary>
       </main>
 
       {/* Footer */}

@@ -18,7 +18,6 @@ import {
 import {
   handleControlPanelButton,
   handleControlPanelModal,
-  buildPanelEmbed,
 } from '../discord/control-panel';
 
 const logger = createLogger('playnext-test');
@@ -45,26 +44,33 @@ class MockVoiceAdapter implements VoicePlatformAdapter {
     return this.voiceStatus;
   }
 
+  getCurrentTrack(guildId: string): AudioTrackInfo | null {
+    return this.currentTrack;
+  }
+
   async play(guildId: string, source: AudioSource): Promise<void> {
     this.playerStatus = 'PLAYING';
     this.currentTrack = {
-      title: source.identifier,
+      name: source.identifier,
       source: 'local',
       duration: 180,
-    };
+    } as any;
   }
 
-  pause(guildId: string): void {
+  pause(guildId: string): boolean {
     this.playerStatus = 'PAUSED';
+    return true;
   }
 
-  resume(guildId: string): void {
+  resume(guildId: string): boolean {
     this.playerStatus = 'PLAYING';
+    return true;
   }
 
-  stop(guildId: string): void {
+  stop(guildId: string): boolean {
     this.playerStatus = 'IDLE';
     this.currentTrack = null;
+    return true;
   }
 
   async seek(guildId: string, positionSeconds: number): Promise<number | null> {
@@ -79,11 +85,8 @@ class MockVoiceAdapter implements VoicePlatformAdapter {
     return {
       voiceState: this.voiceStatus,
       playerState: this.playerStatus,
-      currentTrack: this.currentTrack,
-      volume: 100,
-      loopMode: 'off',
       channelId: 'mock-channel',
-    };
+    } as any;
   }
 
   onStateChange(listener: (state: VoicePlatformState) => void): () => void {
@@ -178,7 +181,8 @@ async function runPlayNextTests() {
     identifier: name,
     sourceType: 'file',
     async getStream() { return null as any; },
-    async validate() { return true; },
+    async validate() {},
+    async getMetadata() { return { title: name, duration: 180 }; },
   });
 
   // Track 0 starts playing (idle -> playing immediately)

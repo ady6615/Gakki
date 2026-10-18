@@ -40,11 +40,27 @@ export function lyricsRoutes(lyricsManager?: LyricsManager): Router {
       if (!result) {
         return res.status(200).json({
           lyrics: null,
+          synced: false,
+          lines: [],
+          plainLyrics: null,
+          syncedLyrics: [],
+          isSynced: false,
           message: 'Lyrics unavailable.',
         });
       }
 
-      return res.json({ lyrics: result });
+      return res.json({
+        lyrics: result.plainLyrics,
+        synced: result.isSynced,
+        lines: result.syncedLyrics || [],
+        plainLyrics: result.plainLyrics,
+        syncedLyrics: result.syncedLyrics || [],
+        isSynced: result.isSynced,
+        providerName: result.providerName,
+        sourceAttribution: result.sourceAttribution,
+        confidence: result.confidence,
+        data: result,
+      });
     } catch (err: any) {
       logger.error({ err }, 'Failed to resolve lyrics');
       return res.status(500).json({ error: 'Failed to resolve lyrics' });
