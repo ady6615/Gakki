@@ -497,11 +497,13 @@ export class DiscordVoiceAdapter implements VoicePlatformAdapter {
   }
 
   getState(guildId: string): VoicePlatformState {
+    const elapsedMs = this.getPlaybackDuration(guildId);
     return {
       guildId,
       voiceState: this.voiceStates.get(guildId) || 'DISCONNECTED',
       playerState: this.playerStates.get(guildId) || 'IDLE',
       track: this.currentTracks.get(guildId) || null,
+      positionSeconds: Math.round((elapsedMs / 1000) * 10) / 10,
     };
   }
 

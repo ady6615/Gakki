@@ -37,6 +37,41 @@ export function LyricsPanel({
   const [currentPositionSec, setCurrentPositionSec] = useState(0);
   const [activeLineIndex, setActiveLineIndex] = useState(-1);
 
+  // Lead sync compensation (default +2.5s cancels Discord audio pipeline & buffering delay)
+  const [syncOffsetSec, setSyncOffsetSec] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem('gakki_lyrics_offset');
+      if (saved !== null) {
+        const parsed = parseFloat(saved);
+        if (!isNaN(parsed)) return parsed;
+      }
+    } catch {
+      // ignore
+    }
+    return 2.5;
+  });
+
+  const updateSyncOffset = (delta: number) => {
+    setSyncOffsetSec((prev) => {
+      const next = Math.round((prev + delta) * 10) / 10;
+      try {
+        localStorage.setItem('gakki_lyrics_offset', String(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  };
+
+  const resetSyncOffset = () => {
+    setSyncOffsetSec(2.5);
+    try {
+      localStorage.setItem('gakki_lyrics_offset', '2.5');
+    } catch {
+      // ignore
+    }
+  };
+
   // Fetch lyrics when track changes
   useEffect(() => {
     if (!trackTitle && !trackId) {
@@ -120,15 +155,15 @@ export function LyricsPanel({
     };
   }, [trackTitle, trackArtist, trackDuration, trackId]);
 
-  // Interpolate playback position when playing
+  // Interpolate playback position smoothly when playing
   useEffect(() => {
     if (!isPlaying) return;
     const interval = setInterval(() => {
       setCurrentPositionSec((prev) => {
         if (trackDuration && prev >= trackDuration) return prev;
-        return prev + 0.5;
+        return prev + 0.25;
       });
-    }, 500);
+    }, 250);
 
     return () => clearInterval(interval);
   }, [isPlaying, trackDuration]);
@@ -157,27 +192,28 @@ export function LyricsPanel({
     };
   }, [trackTitle]);
 
-  // Find active lyric line based on current position
+  // Find active lyric line based on current position + sync offset lead
   useEffect(() => {
     if (!lyricsData?.synced || !lyricsData.lines || lyricsData.lines.length === 0) {
       setActiveLineIndex(-1);
       return;
     }
 
-    const currentMs = currentPositionSec * 1000;
+    // Apply sync offset lead compensation so lyrics trigger on beat
+    const effectiveMs = Math.max(0, (currentPositionSec + syncOffsetSec) * 1000);
     const lines = lyricsData.lines;
 
-    // Find the latest line whose timestamp is <= currentMs + 200ms grace window
+    // Find the latest line whose timestamp is <= effectiveMs + 100ms
     let idx = -1;
     for (let i = 0; i < lines.length; i++) {
-      if (lines[i].timeMs <= currentMs + 200) {
+      if (lines[i].timeMs <= effectiveMs + 100) {
         idx = i;
       } else {
         break;
       }
     }
     setActiveLineIndex(idx);
-  }, [currentPositionSec, lyricsData]);
+  }, [currentPositionSec, lyricsData, syncOffsetSec]);
 
   const lines = lyricsData?.lines || [];
   const prevLine = activeLineIndex > 0 ? lines[activeLineIndex - 1]?.text : null;
@@ -203,6 +239,35 @@ export function LyricsPanel({
             </span>
           )}
         </div>
+
+        {lyricsData?.synced && (
+          <div className="lyrics-sync-controls" title="Fine-tune lyrics timing offset">
+            <button
+              type="button"
+              className="sync-adj-btn"
+              onClick={() => updateSyncOffset(-0.5)}
+              aria-label="Delay lyrics 0.5s"
+            >
+              -0.5s
+            </button>
+            <span
+              className="sync-offset-pill"
+              onClick={resetSyncOffset}
+              title="Click to reset to default (+2.5s)"
+              style={{ cursor: 'pointer' }}
+            >
+              Sync: {syncOffsetSec > 0 ? `+${syncOffsetSec.toFixed(1)}s` : `${syncOffsetSec.toFixed(1)}s`}
+            </span>
+            <button
+              type="button"
+              className="sync-adj-btn"
+              onClick={() => updateSyncOffset(0.5)}
+              aria-label="Advance lyrics 0.5s"
+            >
+              +0.5s
+            </button>
+          </div>
+        )}
       </div>
 
       {loading && (

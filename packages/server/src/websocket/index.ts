@@ -329,6 +329,34 @@ export function createWebSocketServer(
         state,
       });
     });
+
+    // Periodic playback position ticker for live lyrics & seekbar synchronization
+    const positionTicker = setInterval(() => {
+      if (!wssInstance || wssInstance.clients.size === 0) return;
+
+      const activeGuilds = new Set<string>(lastKnownQueues.keys());
+      if (lastKnownState.guildId) {
+        activeGuilds.add(lastKnownState.guildId);
+      }
+      if (activeGuilds.size === 0) {
+        activeGuilds.add('');
+      }
+
+      for (const guildId of activeGuilds) {
+        const state = activePlaybackManager.getState(guildId);
+        if (state.playerState === 'PLAYING') {
+          const elapsedMs = activePlaybackManager.getPlaybackDuration(guildId);
+          const positionSeconds = Math.round((elapsedMs / 1000) * 10) / 10;
+          broadcastEvent({
+            type: 'playback.position',
+            guildId,
+            positionSeconds,
+            elapsedMs,
+          });
+        }
+      }
+    }, 1000);
+    positionTicker.unref();
   }
 
   logger.info('WebSocket server attached at /ws');

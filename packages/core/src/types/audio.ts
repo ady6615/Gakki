@@ -19,6 +19,7 @@ export interface VoicePlatformState {
   voiceState: VoiceConnectionStatus;
   playerState: PlaybackStatus;
   track: AudioTrackInfo | null;
+  positionSeconds?: number;
 }
 
 export interface AudioMetadata {
