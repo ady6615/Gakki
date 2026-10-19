@@ -55,6 +55,13 @@ async function packWindows() {
     fs.cpSync(webDist, path.join(appDir, 'web/dist'), { recursive: true });
   }
 
+  // Copy assets folder if present
+  const assetsDir = path.resolve(rootDir, '../../assets');
+  if (fs.existsSync(assetsDir)) {
+    console.log('[PACK] Bundling application logo and visual assets...');
+    fs.cpSync(assetsDir, path.join(appDir, 'assets'), { recursive: true });
+  }
+
   // 4. Create README for user
   const readmeContent = [
     '# Gakki Desktop Application (Windows Portable Release)',

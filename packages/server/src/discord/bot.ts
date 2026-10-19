@@ -1,4 +1,6 @@
 import { Client, GatewayIntentBits } from 'discord.js';
+import path from 'node:path';
+import fs from 'node:fs';
 import type {
   AudioPlayerManager,
   PlaybackManager,
@@ -144,6 +146,23 @@ export async function createDiscordBot(
       }
     } catch (cmdErr) {
       logger.error({ err: cmdErr }, 'Failed to register global slash commands');
+    }
+
+    // Set bot avatar from 1080pxLogo.png if not yet set
+    try {
+      const avatarCandidates = [
+        path.resolve(process.cwd(), 'assets', '1080pxLogo.png'),
+        path.resolve(__dirname, '..', '..', '..', '..', 'assets', '1080pxLogo.png'),
+        path.resolve(__dirname, '..', '..', '..', 'assets', '1080pxLogo.png'),
+      ];
+      const avatarPath = avatarCandidates.find((p) => fs.existsSync(p));
+      if (avatarPath && !readyClient.user.avatar) {
+        logger.info({ avatarPath }, 'Setting Discord bot avatar from 1080pxLogo.png...');
+        await readyClient.user.setAvatar(avatarPath);
+        logger.info('Discord bot avatar updated successfully');
+      }
+    } catch (avatarErr) {
+      logger.debug({ err: avatarErr }, 'Could not automatically set bot avatar (may already be set or rate-limited)');
     }
 
     if (playlistManager) {

@@ -1,4 +1,6 @@
 import { Tray, Menu, nativeImage, type BrowserWindow, app } from 'electron';
+import * as path from 'node:path';
+import * as fs from 'node:fs';
 import { desktopLogger } from './logger.js';
 
 // Clean musical note icon 16x16 PNG embedded as base64 fallback
@@ -32,7 +34,16 @@ export class DesktopTrayManager {
   }
 
   private createTray(): void {
-    const icon = nativeImage.createFromBuffer(DEFAULT_ICON_PNG);
+    const iconCandidates = [
+      path.resolve(__dirname, '../../../../assets/Low_res_logo.png'),
+      path.resolve(__dirname, '../../../assets/Low_res_logo.png'),
+      path.resolve(app.getAppPath(), 'assets/Low_res_logo.png'),
+      path.resolve(process.cwd(), 'assets/Low_res_logo.png'),
+    ];
+    const iconPath = iconCandidates.find((p) => fs.existsSync(p));
+    const icon = iconPath
+      ? nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 })
+      : nativeImage.createFromBuffer(DEFAULT_ICON_PNG);
     this.tray = new Tray(icon);
     this.tray.setToolTip('Gakki Music Platform');
 

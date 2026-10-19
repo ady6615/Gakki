@@ -317,7 +317,7 @@ export function NowPlayingCard({
               {trackArtwork ? (
                 <img src={trackArtwork} alt="" className="vinyl-artwork" />
               ) : (
-                <span className="vinyl-icon">🎵</span>
+                <img src="/logo-small.png" alt="Gakki Logo" className="vinyl-artwork vinyl-default-logo" />
               )}
             </div>
           </div>

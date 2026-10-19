@@ -288,7 +288,9 @@ function App() {
       {/* Top Navigation Bar */}
       <header className="app-header glass-panel">
         <div className="brand-group">
-          <span className="brand-logo">🎵</span>
+          <div className="brand-logo-badge" title="Gakki Music Platform">
+            <img src="/logo-small.png" alt="Gakki Logo" className="brand-logo-img" />
+          </div>
           <div className="brand-text">
             <h1 className="brand-title">Gakki</h1>
             <span className="brand-version">Music Platform • v0.10.0</span>

@@ -87,6 +87,18 @@ export function createApiServer(
   // Error handling (must be registered last for API routes)
   app.use(errorHandler);
 
+  // ── Serve Static Assets (Logos & Visual Assets) ───────────────
+  const assetCandidates = [
+    path.resolve(process.cwd(), 'assets'),
+    path.resolve(__dirname, '..', '..', '..', '..', 'assets'),
+    path.resolve(__dirname, '..', '..', '..', 'assets'),
+  ];
+  const assetsDir = assetCandidates.find((p) => fs.existsSync(p));
+  if (assetsDir) {
+    app.use('/assets', express.static(assetsDir));
+    logger.info({ assetsDir }, 'Serving static visual assets from /assets');
+  }
+
   // ── Serve Web Dashboard (Vite build output) ───────────────────
   // Try multiple possible paths for the web dist (works with both tsx dev and compiled JS)
   const candidates = [

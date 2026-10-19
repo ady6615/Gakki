@@ -1510,8 +1510,31 @@ body {
   gap: 0.8rem;
 }
 
-.brand-logo {
-  font-size: 2rem;
+.brand-logo-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: rgba(220, 38, 38, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  box-shadow: 0 0 16px rgba(239, 68, 68, 0.25);
+  padding: 5px;
+  transition: transform 0.25s ease, box-shadow 0.25s ease;
+  flex-shrink: 0;
+}
+
+.brand-logo-badge:hover {
+  transform: scale(1.08);
+  box-shadow: 0 0 24px rgba(239, 68, 68, 0.45);
+}
+
+.brand-logo-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.4));
 }
 
 .brand-title {
@@ -1854,6 +1877,12 @@ body {
 
 .vinyl-icon {
   font-size: 1.2rem;
+}
+
+.vinyl-default-logo {
+  object-fit: contain;
+  padding: 6px;
+  background: #111116;
 }
 
 .album-art-underlay {

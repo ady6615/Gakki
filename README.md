@@ -1,12 +1,20 @@
-# Gakki — AI-Powered Cross-Platform Music & Voice Platform
+<p align="center">
+  <img src="assets/High_res_logo.png" alt="Gakki Music Platform Logo" width="200" />
+</p>
 
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue.svg)](https://www.typescriptlang.org/)
-[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D20-green.svg)](https://nodejs.org/)
-[![Vite](https://img.shields.io/badge/Frontend-Vite%20%2B%20React-purple.svg)](https://vitejs.dev/)
-[![Gemini 2.0 Live](https://img.shields.io/badge/AI%20Agent-Gemini%202.0%20Live-orange.svg)](https://deepmind.google/technologies/gemini/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+<h1 align="center">Gakki — AI-Powered Cross-Platform Music & Voice Platform</h1>
 
-**Gakki** is an enterprise-grade, modular music and voice platform featuring seamless Discord playback, low-latency desktop audio output, Gemini Live-powered conversational voice interaction, intelligent AI DJ commentary, multi-track recording, and Google Meet conference audio integration.
+<p align="center">
+  <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.7-blue.svg" alt="TypeScript" /></a>
+  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-%3E%3D20-green.svg" alt="Node.js" /></a>
+  <a href="https://vitejs.dev/"><img src="https://img.shields.io/badge/Frontend-Vite%20%2B%20React-purple.svg" alt="Frontend Vite React" /></a>
+  <a href="https://deepmind.google/technologies/gemini/"><img src="https://img.shields.io/badge/AI%20Agent-Gemini%202.0%20Live-orange.svg" alt="Gemini 2.0 Live" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" /></a>
+</p>
+
+<p align="center">
+  <strong>Gakki</strong> is an enterprise-grade, modular music and voice platform featuring seamless Discord playback, low-latency desktop audio output, Gemini Live-powered conversational voice interaction, intelligent AI DJ commentary, multi-track recording, and Google Meet conference audio integration.
+</p>
 
 ---
 

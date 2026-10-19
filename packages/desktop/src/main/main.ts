@@ -68,6 +68,13 @@ class GakkiDesktopApp {
 
   private createMainWindow(): void {
     const preloadPath = path.resolve(__dirname, '../preload/preload.js');
+    const iconCandidates = [
+      path.resolve(__dirname, '../../../../assets/1080pxLogo.png'),
+      path.resolve(__dirname, '../../../assets/1080pxLogo.png'),
+      path.resolve(app.getAppPath(), 'assets/1080pxLogo.png'),
+      path.resolve(process.cwd(), 'assets/1080pxLogo.png'),
+    ];
+    const iconPath = iconCandidates.find((p) => fs.existsSync(p));
 
     this.mainWindow = new BrowserWindow({
       width: 1366,
@@ -75,6 +82,7 @@ class GakkiDesktopApp {
       minWidth: 1024,
       minHeight: 700,
       title: 'Gakki Music Platform',
+      icon: iconPath,
       backgroundColor: '#0a0a0f',
       webPreferences: {
         preload: preloadPath,
