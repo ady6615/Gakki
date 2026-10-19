@@ -2532,18 +2532,33 @@ body {
 
 .clear-queue-btn {
   background: transparent;
-  border: 1px solid rgba(239, 68, 68, 0.3);
+  border: 1px solid rgba(239, 68, 68, 0.35);
   color: #f87171;
   font-size: 0.75rem;
-  padding: 0.25rem 0.6rem;
+  font-weight: 600;
+  padding: 0.25rem 0.65rem;
   border-radius: 6px;
   cursor: pointer;
   flex-shrink: 0;
-  transition: all 0.2s;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
 }
 
-.clear-queue-btn:hover {
-  background: rgba(239, 68, 68, 0.15);
+.clear-queue-btn:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.18);
+  border-color: rgba(239, 68, 68, 0.55);
+  transform: translateY(-1px);
+}
+
+.clear-queue-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #94a3b8;
+  background: transparent;
+  transform: none;
 }
 
 .pinned-now-playing {

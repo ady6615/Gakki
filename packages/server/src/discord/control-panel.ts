@@ -218,11 +218,6 @@ function buildComponentRows(
   // ── Row 1: Primary Playback Controls ───────────────────────────────────
   const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
-      .setCustomId('gakki:prev')
-      .setEmoji(EMOJI.PREV)
-      .setStyle(ButtonStyle.Secondary)
-      .setDisabled(!hasTrack),
-    new ButtonBuilder()
       .setCustomId('gakki:play_pause')
       .setEmoji(isPlaying ? EMOJI.PAUSE : EMOJI.PLAY)
       .setStyle(isPlaying ? ButtonStyle.Secondary : ButtonStyle.Success)
@@ -232,6 +227,12 @@ function buildComponentRows(
       .setEmoji(EMOJI.SKIP)
       .setStyle(ButtonStyle.Primary)
       .setDisabled(!hasTrack && queueLength === 0),
+    new ButtonBuilder()
+      .setCustomId('gakki:stop')
+      .setEmoji(EMOJI.STOP)
+      .setLabel('Stop')
+      .setStyle(ButtonStyle.Danger)
+      .setDisabled(!hasTrack && state.voiceState === 'DISCONNECTED'),
     new ButtonBuilder()
       .setCustomId('gakki:search')
       .setEmoji(EMOJI.ADD)
@@ -261,7 +262,7 @@ function buildComponentRows(
     new ButtonBuilder()
       .setCustomId('gakki:seek_restart')
       .setLabel('0:00')
-      .setEmoji('🔄')
+      .setEmoji('⏮️')
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(!hasTrack),
     new ButtonBuilder()
@@ -479,11 +480,11 @@ function buildComponentRows(
       .setLabel(`Queue (${queueLength})`)
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
-      .setCustomId('gakki:stop')
-      .setEmoji(EMOJI.STOP)
-      .setLabel('Stop')
+      .setCustomId('gakki:clear_queue')
+      .setEmoji(EMOJI.CLEAR)
+      .setLabel('Clear Queue')
       .setStyle(ButtonStyle.Danger)
-      .setDisabled(!hasTrack && state.voiceState === 'DISCONNECTED'),
+      .setDisabled(queueLength === 0),
     new ButtonBuilder()
       .setCustomId('gakki:disconnect')
       .setEmoji(EMOJI.DISCONNECT)
@@ -940,7 +941,15 @@ export async function handleControlPanelButton(
           .setDescription(`${listStr}${remainingCount}\n\n**Total Estimated Time:** \`${formatDuration(totalSecs)}\``)
           .setFooter({ text: 'Use the control panel buttons to control playback.' });
 
-        await interaction.reply({ embeds: [queueEmbed], ephemeral: true });
+        const queueActionRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder()
+            .setCustomId('gakki:clear_queue')
+            .setEmoji(EMOJI.CLEAR)
+            .setLabel('Clear Queue')
+            .setStyle(ButtonStyle.Danger),
+        );
+
+        await interaction.reply({ embeds: [queueEmbed], components: [queueActionRow], ephemeral: true });
         return;
       }
 

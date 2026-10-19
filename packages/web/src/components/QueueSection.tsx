@@ -298,15 +298,15 @@ export function QueueSection({ queueState, guildId, onRefresh }: QueueSectionPro
             {localQueue.length} {localQueue.length === 1 ? 'track' : 'tracks'}
           </span>
         </div>
-        {localQueue.length > 0 && (
-          <button
-            className="clear-queue-btn"
-            onClick={handleClear}
-            aria-label="Clear all tracks in queue"
-          >
-            Clear All
-          </button>
-        )}
+        <button
+          className="clear-queue-btn"
+          onClick={handleClear}
+          disabled={localQueue.length === 0}
+          aria-label="Clear all tracks in queue"
+          title={localQueue.length === 0 ? 'Queue is empty' : 'Clear all tracks in queue'}
+        >
+          🧹 Clear Queue
+        </button>
       </div>
 
       {/* Quick Play & Local File Ingestion Bar */}
