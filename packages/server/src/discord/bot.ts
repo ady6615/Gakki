@@ -1,6 +1,7 @@
 import { Client, GatewayIntentBits } from 'discord.js';
 import path from 'node:path';
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import type {
   AudioPlayerManager,
   PlaybackManager,
@@ -148,7 +149,7 @@ export async function createDiscordBot(
       logger.error({ err: cmdErr }, 'Failed to register global slash commands');
     }
 
-    // Set bot avatar from 1080pxLogo.png if not yet set
+    // Synchronize bot avatar from 1080pxLogo.png if file updated
     try {
       const avatarCandidates = [
         path.resolve(process.cwd(), 'assets', '1080pxLogo.png'),
@@ -156,10 +157,22 @@ export async function createDiscordBot(
         path.resolve(__dirname, '..', '..', '..', 'assets', '1080pxLogo.png'),
       ];
       const avatarPath = avatarCandidates.find((p) => fs.existsSync(p));
-      if (avatarPath && !readyClient.user.avatar) {
-        logger.info({ avatarPath }, 'Setting Discord bot avatar from 1080pxLogo.png...');
-        await readyClient.user.setAvatar(avatarPath);
-        logger.info('Discord bot avatar updated successfully');
+      if (avatarPath) {
+        const hashDir = path.resolve(process.cwd(), 'storage', 'cache');
+        const hashFile = path.join(hashDir, 'bot-avatar.hash');
+        const fileBuf = fs.readFileSync(avatarPath);
+        const fileHash = crypto.createHash('md5').update(fileBuf).digest('hex');
+        let currentCachedHash = '';
+        if (fs.existsSync(hashFile)) {
+          currentCachedHash = fs.readFileSync(hashFile, 'utf8').trim();
+        }
+        if (!readyClient.user.avatar || currentCachedHash !== fileHash) {
+          logger.info({ avatarPath, fileHash }, 'Updating Discord bot avatar from 1080pxLogo.png...');
+          await readyClient.user.setAvatar(avatarPath);
+          fs.mkdirSync(hashDir, { recursive: true });
+          fs.writeFileSync(hashFile, fileHash, 'utf8');
+          logger.info('Discord bot avatar updated successfully');
+        }
       }
     } catch (avatarErr) {
       logger.debug({ err: avatarErr }, 'Could not automatically set bot avatar (may already be set or rate-limited)');

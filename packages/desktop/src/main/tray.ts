@@ -39,6 +39,10 @@ export class DesktopTrayManager {
       path.resolve(__dirname, '../../../assets/Low_res_logo.png'),
       path.resolve(app.getAppPath(), 'assets/Low_res_logo.png'),
       path.resolve(process.cwd(), 'assets/Low_res_logo.png'),
+      path.resolve(__dirname, '../../../../assets/1080pxLogo.png'),
+      path.resolve(__dirname, '../../../assets/1080pxLogo.png'),
+      path.resolve(app.getAppPath(), 'assets/1080pxLogo.png'),
+      path.resolve(process.cwd(), 'assets/1080pxLogo.png'),
     ];
     const iconPath = iconCandidates.find((p) => fs.existsSync(p));
     const icon = iconPath
