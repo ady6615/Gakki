@@ -12,4 +12,5 @@ storage/tmp/
 packages/server/storage/
 *.audio
 *.exe
+assets/gakki_bot_logo.ai
 

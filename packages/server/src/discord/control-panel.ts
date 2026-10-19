@@ -218,6 +218,11 @@ function buildComponentRows(
   // ── Row 1: Primary Playback Controls ───────────────────────────────────
   const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
+      .setCustomId('gakki:prev')
+      .setEmoji(EMOJI.PREV)
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(!hasTrack),
+    new ButtonBuilder()
       .setCustomId('gakki:play_pause')
       .setEmoji(isPlaying ? EMOJI.PAUSE : EMOJI.PLAY)
       .setStyle(isPlaying ? ButtonStyle.Secondary : ButtonStyle.Success)
@@ -238,11 +243,6 @@ function buildComponentRows(
       .setEmoji(EMOJI.ADD)
       .setLabel('Play')
       .setStyle(ButtonStyle.Success),
-    new ButtonBuilder()
-      .setCustomId('gakki:playnext')
-      .setEmoji(EMOJI.PLAYNEXT)
-      .setLabel('Play Next')
-      .setStyle(ButtonStyle.Success),
   );
 
   // ── Row 2: Quick Jump Navigation & Seek Buttons ─────────────────────────
@@ -262,7 +262,7 @@ function buildComponentRows(
     new ButtonBuilder()
       .setCustomId('gakki:seek_restart')
       .setLabel('0:00')
-      .setEmoji('⏮️')
+      .setEmoji('🔄')
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(!hasTrack),
     new ButtonBuilder()
@@ -279,88 +279,59 @@ function buildComponentRows(
       .setDisabled(!hasTrack),
   );
 
-  // ── Row 3: Interactive Song Navigation (Select Menu) ─────────────────────
+  // ── Row 3: Queue & Track Manipulation ───────────────────────────────────
+  const loopLabels: Record<LoopMode, string> = {
+    off: 'Loop: Off',
+    track: 'Loop: Track',
+    queue: 'Loop: Queue',
+  };
+  const loopEmojis: Record<LoopMode, string> = {
+    off: EMOJI.LOOP_OFF,
+    track: EMOJI.LOOP_TRACK,
+    queue: EMOJI.LOOP_QUEUE,
+  };
+
+  const row3 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId('gakki:playnext')
+      .setEmoji(EMOJI.PLAYNEXT)
+      .setLabel('Play Next')
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId('gakki:shuffle')
+      .setEmoji(EMOJI.SHUFFLE)
+      .setLabel('Shuffle')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(queueLength < 2),
+    new ButtonBuilder()
+      .setCustomId('gakki:loop_cycle')
+      .setEmoji(loopEmojis[loopMode])
+      .setLabel(loopLabels[loopMode])
+      .setStyle(loopMode !== 'off' ? ButtonStyle.Primary : ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId('gakki:view_queue')
+      .setEmoji(EMOJI.QUEUE)
+      .setLabel(`Queue (${queueLength})`)
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId('gakki:clear_queue')
+      .setEmoji(EMOJI.CLEAR)
+      .setLabel('Clear Queue')
+      .setStyle(ButtonStyle.Danger)
+      .setDisabled(queueLength === 0),
+  );
+
+  // ── Row 4: Audio Controls, Effects, Speed & Navigation (Select Menu) ─────
   const currentTrack = playbackManager.getCurrentTrack(guildId);
   const elapsedMs = playbackManager.getPlaybackDuration(guildId);
   const elapsedSec = Math.floor(elapsedMs / 1000);
   const totalDuration = currentTrack?.duration ?? 0;
 
-  const navPlaceholder = hasTrack
-    ? `🧭 Song Navigation (${formatDuration(elapsedSec)} / ${formatDuration(totalDuration)})`
-    : '🧭 Song Navigation (Play a song to navigate)';
-
-  const navOptions = [
-    {
-      label: '⏪ −30s (Rewind 30 Seconds)',
-      value: 'rel_-30',
-      emoji: '⏪',
-      description: 'Skip backward by 30 seconds',
-    },
-    {
-      label: '◀️ −10s (Rewind 10 Seconds)',
-      value: 'rel_-10',
-      emoji: '◀️',
-      description: 'Skip backward by 10 seconds',
-    },
-    {
-      label: '▶️ +10s (Skip Ahead 10 Seconds)',
-      value: 'rel_10',
-      emoji: '▶️',
-      description: 'Skip forward by 10 seconds',
-    },
-    {
-      label: '⏩ +30s (Skip Ahead 30 Seconds)',
-      value: 'rel_30',
-      emoji: '⏩',
-      description: 'Skip forward by 30 seconds',
-    },
-    {
-      label: '⏭️ +60s (Skip Ahead 1 Minute)',
-      value: 'rel_60',
-      emoji: '⏭️',
-      description: 'Skip forward by 60 seconds',
-    },
-    {
-      label: '⏮️ Restart Song from Beginning',
-      value: 'abs_0',
-      emoji: '⏮️',
-      description: 'Replay from the very beginning (0:00)',
-    },
-    {
-      label: '¼ Jump to 25% (First Quarter)',
-      value: 'pct_25',
-      emoji: '⏱️',
-      description: 'Jump to 25% through the song',
-    },
-    {
-      label: '½ Jump to 50% (Halfway Point)',
-      value: 'pct_50',
-      emoji: '⏱️',
-      description: 'Jump to midpoint of the song',
-    },
-    {
-      label: '¾ Jump to 75% (Three-Quarter Mark)',
-      value: 'pct_75',
-      emoji: '⏱️',
-      description: 'Jump to 75% through the song',
-    },
-  ];
-
-  const row3 = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
-    new StringSelectMenuBuilder()
-      .setCustomId('gakki:nav_menu')
-      .setPlaceholder(navPlaceholder.slice(0, 100))
-      .setMinValues(1)
-      .setMaxValues(1)
-      .setDisabled(!hasTrack)
-      .addOptions(navOptions),
-  );
-
-  // ── Row 4: Audio Effects, Speed & Volume Presets (Select Menu) ───────────
   const speedLabel = filters.speed !== 1.0 ? ` • Speed: ${filters.speed}x` : '';
   const bbLabel = filters.bassboost ? ' • BassBoost: ON' : '';
   const ncLabel = filters.nightcore ? ' • Nightcore: ON' : '';
-  const effectsPlaceholder = `🎛️ Audio Effects, Speed & Volume (${volume}%)${bbLabel}${ncLabel}${speedLabel}`;
+  const navLabel = hasTrack ? ` • [${formatDuration(elapsedSec)}/${formatDuration(totalDuration)}]` : '';
+  const effectsPlaceholder = `🎛️ Audio Controls, Effects, Speed & Nav (${volume}%)${navLabel}${bbLabel}${ncLabel}${speedLabel}`;
 
   const row4 = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
     new StringSelectMenuBuilder()
@@ -369,6 +340,60 @@ function buildComponentRows(
       .setMinValues(1)
       .setMaxValues(1)
       .addOptions(
+        {
+          label: '⏪ −30s (Rewind 30 Seconds)',
+          value: 'rel_-30',
+          emoji: '⏪',
+          description: 'Skip backward by 30 seconds',
+        },
+        {
+          label: '◀️ −10s (Rewind 10 Seconds)',
+          value: 'rel_-10',
+          emoji: '◀️',
+          description: 'Skip backward by 10 seconds',
+        },
+        {
+          label: '▶️ +10s (Skip Ahead 10 Seconds)',
+          value: 'rel_10',
+          emoji: '▶️',
+          description: 'Skip forward by 10 seconds',
+        },
+        {
+          label: '⏩ +30s (Skip Ahead 30 Seconds)',
+          value: 'rel_30',
+          emoji: '⏩',
+          description: 'Skip forward by 30 seconds',
+        },
+        {
+          label: '⏭️ +60s (Skip Ahead 1 Minute)',
+          value: 'rel_60',
+          emoji: '⏭️',
+          description: 'Skip forward by 60 seconds',
+        },
+        {
+          label: '⏮️ Restart Song from Beginning',
+          value: 'abs_0',
+          emoji: '⏮️',
+          description: 'Replay from the very beginning (0:00)',
+        },
+        {
+          label: '¼ Jump to 25% (First Quarter)',
+          value: 'pct_25',
+          emoji: '⏱️',
+          description: 'Jump to 25% through the song',
+        },
+        {
+          label: '½ Jump to 50% (Halfway Point)',
+          value: 'pct_50',
+          emoji: '⏱️',
+          description: 'Jump to midpoint of the song',
+        },
+        {
+          label: '¾ Jump to 75% (Three-Quarter Mark)',
+          value: 'pct_75',
+          emoji: '⏱️',
+          description: 'Jump to 75% through the song',
+        },
         {
           label: 'Normal / Reset EQ',
           value: 'flat',
@@ -450,41 +475,8 @@ function buildComponentRows(
       ),
   );
 
-  // ── Row 5: Queue & Management Buttons ────────────────────────────────────
-  const loopLabels: Record<LoopMode, string> = {
-    off: 'Loop: Off',
-    track: 'Loop: Track',
-    queue: 'Loop: Queue',
-  };
-  const loopEmojis: Record<LoopMode, string> = {
-    off: EMOJI.LOOP_OFF,
-    track: EMOJI.LOOP_TRACK,
-    queue: EMOJI.LOOP_QUEUE,
-  };
-
+  // ── Row 5: Voice Session Control ─────────────────────────────────────────
   const row5 = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId('gakki:shuffle')
-      .setEmoji(EMOJI.SHUFFLE)
-      .setLabel('Shuffle')
-      .setStyle(ButtonStyle.Secondary)
-      .setDisabled(queueLength < 2),
-    new ButtonBuilder()
-      .setCustomId('gakki:loop_cycle')
-      .setEmoji(loopEmojis[loopMode])
-      .setLabel(loopLabels[loopMode])
-      .setStyle(loopMode !== 'off' ? ButtonStyle.Primary : ButtonStyle.Secondary),
-    new ButtonBuilder()
-      .setCustomId('gakki:view_queue')
-      .setEmoji(EMOJI.QUEUE)
-      .setLabel(`Queue (${queueLength})`)
-      .setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder()
-      .setCustomId('gakki:clear_queue')
-      .setEmoji(EMOJI.CLEAR)
-      .setLabel('Clear Queue')
-      .setStyle(ButtonStyle.Danger)
-      .setDisabled(queueLength === 0),
     new ButtonBuilder()
       .setCustomId('gakki:disconnect')
       .setEmoji(EMOJI.DISCONNECT)
@@ -1013,11 +1005,45 @@ export async function handleControlPanelSelectMenu(
         break;
       }
 
-      // ── Audio Effects & Speed Slider ───────────────────────────────
-      case 'gakki:effects_slider': {
+      // ── Audio Controls, Effects, Speed & Song Navigation ──────────
+      case 'gakki:effects_slider':
+      case 'gakki:nav_menu': {
         const selected = interaction.values[0];
 
-        if (selected === 'flat') {
+        if (selected.startsWith('rel_') || selected === 'abs_0' || selected.startsWith('pct_')) {
+          const track = playbackManager.getCurrentTrack(guildId);
+          if (!track) {
+            await interaction.reply({ content: 'No track currently playing.', ephemeral: true });
+            break;
+          }
+
+          let newPos: number | null = null;
+          let desc = '';
+
+          if (selected.startsWith('rel_')) {
+            const delta = parseInt(selected.replace('rel_', ''), 10);
+            newPos = await playbackManager.seek(guildId, delta, true);
+            desc = delta > 0 ? `skipped ahead **+${delta}s**` : `rewound **${delta}s**`;
+          } else if (selected === 'abs_0') {
+            newPos = await playbackManager.seek(guildId, 0, false);
+            desc = 'restarted from start (**0:00**)';
+          } else if (selected.startsWith('pct_')) {
+            const pct = parseInt(selected.replace('pct_', ''), 10);
+            const duration = track.duration || 0;
+            const target = Math.floor((duration * pct) / 100);
+            newPos = await playbackManager.seek(guildId, target, false);
+            desc = `jumped to **${pct}%** (${formatDuration(target)})`;
+          }
+
+          if (newPos !== null) {
+            await interaction.reply({
+              content: `🧭 **Song Navigation:** Successfully ${desc} → Position: **${formatDuration(newPos)}** / **${formatDuration(track.duration)}**`,
+              ephemeral: true,
+            });
+          } else {
+            await interaction.reply({ content: 'Could not navigate current track.', ephemeral: true });
+          }
+        } else if (selected === 'flat') {
           await playbackManager.setSpeed(guildId, 1.0);
           await playbackManager.setBassboost(guildId, false);
           await playbackManager.setNightcore(guildId, false);
@@ -1043,44 +1069,6 @@ export async function handleControlPanelSelectMenu(
             content: `🎚️ Volume set to **${volVal}%** \`${createVolumeBar(volVal)}\``,
             ephemeral: true,
           });
-        }
-        break;
-      }
-
-      // ── Song Navigation Setting (Select Menu) ──────────────────────
-      case 'gakki:nav_menu': {
-        const selected = interaction.values[0];
-        const track = playbackManager.getCurrentTrack(guildId);
-        if (!track) {
-          await interaction.reply({ content: 'No track currently playing.', ephemeral: true });
-          break;
-        }
-
-        let newPos: number | null = null;
-        let desc = '';
-
-        if (selected.startsWith('rel_')) {
-          const delta = parseInt(selected.replace('rel_', ''), 10);
-          newPos = await playbackManager.seek(guildId, delta, true);
-          desc = delta > 0 ? `skipped ahead **+${delta}s**` : `rewound **${delta}s**`;
-        } else if (selected === 'abs_0') {
-          newPos = await playbackManager.seek(guildId, 0, false);
-          desc = 'restarted from start (**0:00**)';
-        } else if (selected.startsWith('pct_')) {
-          const pct = parseInt(selected.replace('pct_', ''), 10);
-          const duration = track.duration || 0;
-          const target = Math.floor((duration * pct) / 100);
-          newPos = await playbackManager.seek(guildId, target, false);
-          desc = `jumped to **${pct}%** (${formatDuration(target)})`;
-        }
-
-        if (newPos !== null) {
-          await interaction.reply({
-            content: `🧭 **Song Navigation:** Successfully ${desc} → Position: **${formatDuration(newPos)}** / **${formatDuration(track.duration)}**`,
-            ephemeral: true,
-          });
-        } else {
-          await interaction.reply({ content: 'Could not navigate current track.', ephemeral: true });
         }
         break;
       }
