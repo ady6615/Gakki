@@ -219,12 +219,14 @@ export async function buildQuickPlayMenu(
 
   // Row 2: Playlist Selection Dropdown (ALWAYS rendered so it is never missing)
   const playlistOptions: StringSelectMenuOptionBuilder[] = [];
+  const seenValues = new Set<string>();
 
   // 0. Dedicated Yesterday's Replay Option
+  const yesterdayVal = yesterdayPl ? `pl:${yesterdayPl.id}` : 'auto:yesterday';
   playlistOptions.push(
     new StringSelectMenuOptionBuilder()
       .setLabel('📅 Play the songs I played yesterday')
-      .setValue(yesterdayPl ? `pl:${yesterdayPl.id}` : 'auto:yesterday')
+      .setValue(yesterdayVal)
       .setDescription(
         yesterdayTracksCount > 0
           ? `${yesterdayTracksCount} track(s) from yesterday (Expires in 2-3 days)`
@@ -232,13 +234,19 @@ export async function buildQuickPlayMenu(
       )
       .setEmoji('📅'),
   );
+  seenValues.add(yesterdayVal);
 
   // 1. Add saved server, user, and imported playlists (up to 20)
-  for (const p of playlistsList.slice(0, 20)) {
+  for (const p of playlistsList) {
+    if (playlistOptions.length >= 20) break;
+    const val = `pl:${p.id}`;
+    if (seenValues.has(val)) continue;
+    seenValues.add(val);
+
     playlistOptions.push(
       new StringSelectMenuOptionBuilder()
         .setLabel(p.name.slice(0, 100))
-        .setValue(`pl:${p.id}`)
+        .setValue(val)
         .setDescription(
           `${p.trackCount} track(s)${p.description ? ` • ${p.description.slice(0, 60)}` : ''}`,
         )
@@ -247,7 +255,8 @@ export async function buildQuickPlayMenu(
   }
 
   // 2. Add dynamic smart mix & history playlist options so the dropdown is never empty
-  if (playlistOptions.length < 25 && !playlistsList.some((p) => p.name.includes('Most Played'))) {
+  if (playlistOptions.length < 25 && !playlistsList.some((p) => p.name.includes('Most Played')) && !seenValues.has('auto:most_played')) {
+    seenValues.add('auto:most_played');
     playlistOptions.push(
       new StringSelectMenuOptionBuilder()
         .setLabel('🔥 Server Most Played Mix')
@@ -257,7 +266,8 @@ export async function buildQuickPlayMenu(
     );
   }
 
-  if (playlistOptions.length < 25 && !playlistsList.some((p) => p.name.includes('Recent'))) {
+  if (playlistOptions.length < 25 && !playlistsList.some((p) => p.name.includes('Recent')) && !seenValues.has('auto:recent')) {
+    seenValues.add('auto:recent');
     playlistOptions.push(
       new StringSelectMenuOptionBuilder()
         .setLabel('⏪ Recent Songs History')
@@ -267,7 +277,8 @@ export async function buildQuickPlayMenu(
     );
   }
 
-  if (playlistOptions.length < 25) {
+  if (playlistOptions.length < 25 && !seenValues.has('auto:smart')) {
+    seenValues.add('auto:smart');
     playlistOptions.push(
       new StringSelectMenuOptionBuilder()
         .setLabel('🎲 Smart Vibe Mix')
@@ -277,7 +288,8 @@ export async function buildQuickPlayMenu(
     );
   }
 
-  if (distinctGenres.length > 0 && playlistOptions.length < 25) {
+  if (distinctGenres.length > 0 && playlistOptions.length < 25 && !seenValues.has('auto:genre')) {
+    seenValues.add('auto:genre');
     playlistOptions.push(
       new StringSelectMenuOptionBuilder()
         .setLabel(`🎧 ${topGenre} Genre Mix`)
@@ -304,22 +316,33 @@ export async function buildQuickPlayMenu(
   );
   components.push(yesterdayButtonRow);
 
-  // Row 3: Genre Mix Dropdown (if genres exist)
+  // Row 4: Genre Mix Dropdown (if genres exist)
   if (distinctGenres.length > 0) {
-    const genreOptions = distinctGenres.slice(0, 25).map((g) =>
-      new StringSelectMenuOptionBuilder()
-        .setLabel(`${g.genre} Mix`)
-        .setValue(`genre:${g.genre}`)
-        .setDescription(`${g.count} track(s) in library`)
-        .setEmoji('🎵'),
-    );
+    const genreOptions: StringSelectMenuOptionBuilder[] = [];
+    const seenGenres = new Set<string>();
+    for (const g of distinctGenres) {
+      if (genreOptions.length >= 25) break;
+      const genreVal = `genre:${g.genre}`;
+      if (seenGenres.has(genreVal)) continue;
+      seenGenres.add(genreVal);
 
-    const genreSelect = new StringSelectMenuBuilder()
-      .setCustomId('gakki:qp:select_genre')
-      .setPlaceholder('🎧 Pick a Genre Mix to Stream...')
-      .addOptions(genreOptions);
+      genreOptions.push(
+        new StringSelectMenuOptionBuilder()
+          .setLabel(`${g.genre} Mix`.slice(0, 100))
+          .setValue(genreVal)
+          .setDescription(`${g.count} track(s) in library`.slice(0, 100))
+          .setEmoji('🎵'),
+      );
+    }
 
-    components.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(genreSelect));
+    if (genreOptions.length > 0) {
+      const genreSelect = new StringSelectMenuBuilder()
+        .setCustomId('gakki:qp:select_genre')
+        .setPlaceholder('🎧 Pick a Genre Mix to Stream...')
+        .addOptions(genreOptions);
+
+      components.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(genreSelect));
+    }
   }
   return { embeds: [embed], components };
 }
