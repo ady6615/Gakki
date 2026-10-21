@@ -47,6 +47,12 @@ import { DownloaderService } from '../audio/downloader.service';
 import { YouTubeSourceProvider } from '../sources/youtube.provider';
 import type { VoiceReceiverManager } from '../voice/voice-receiver';
 import { buildQuickPlayMenu, handleQuickPlayInteraction } from './quickplay-menu';
+import {
+  predictAudioInputType,
+  searchSongsUniversally,
+  buildSongChoiceMessage,
+  storeSongChoiceSession,
+} from './song-selector';
 
 const logger = createLogger('discord-commands');
 
@@ -88,25 +94,11 @@ export const slashCommandDefinitions = [
 
   new SlashCommandBuilder()
     .setName('play')
-    .setDescription('Play a local audio file, folder, URL, or search query')
+    .setDescription('Play any song name, YouTube/Spotify link, folder, or file path')
     .addStringOption((option) =>
       option
-        .setName('input')
-        .setDescription('Local file name, folder path, HTTP audio URL, or SoundCloud link')
-        .setRequired(false)
-        .setAutocomplete(true),
-    )
-    .addStringOption((option) =>
-      option
-        .setName('folder')
-        .setDescription('Mention a whole music folder (name in storage/music or full local path)')
-        .setRequired(false)
-        .setAutocomplete(true),
-    )
-    .addStringOption((option) =>
-      option
-        .setName('file')
-        .setDescription('Local file name in storage/music (legacy compatibility)')
+        .setName('song')
+        .setDescription('Song name (e.g. Bohemian Rhapsody), link (URL/Spotify), or file/folder path')
         .setRequired(false)
         .setAutocomplete(true),
     ),
@@ -116,22 +108,8 @@ export const slashCommandDefinitions = [
     .setDescription('Play a song right after current song (top of queue)')
     .addStringOption((option) =>
       option
-        .setName('input')
-        .setDescription('Song title, artist, URL, or local file')
-        .setRequired(false)
-        .setAutocomplete(true),
-    )
-    .addStringOption((option) =>
-      option
-        .setName('folder')
-        .setDescription('Mention a whole music folder (name in storage/music or full local path)')
-        .setRequired(false)
-        .setAutocomplete(true),
-    )
-    .addStringOption((option) =>
-      option
-        .setName('file')
-        .setDescription('Local file name in storage/music (legacy compatibility)')
+        .setName('song')
+        .setDescription('Song name, link, or path to play next')
         .setRequired(false)
         .setAutocomplete(true),
     ),
@@ -756,10 +734,6 @@ export const slashCommandDefinitions = [
           { name: '⚙️ Settings', value: 'settings' },
         ),
     ),
-
-  new SlashCommandBuilder()
-    .setName('panel')
-    .setDescription('Open the interactive control panel with buttons, volume, effects, and more'),
 ];
 
 /**
@@ -771,25 +745,41 @@ export async function handleAutocomplete(
 ): Promise<void> {
   const focusedOption = interaction.options.getFocused(true);
 
-  if (focusedOption.name === 'file') {
-    const files = await listLocalAudioFiles();
-    const query = (focusedOption.value || '').toLowerCase();
-    const filtered = files
-      .filter((file) => file.toLowerCase().includes(query))
-      .slice(0, 25);
+  if (
+    focusedOption.name === 'song' ||
+    focusedOption.name === 'file' ||
+    focusedOption.name === 'input'
+  ) {
+    const files = await listLocalAudioFiles().catch(() => []);
+    const folders = await listLocalFolders().catch(() => []);
+    const query = (focusedOption.value || '').toLowerCase().trim();
 
-    await interaction.respond(
-      filtered.map((file) => ({ name: file, value: file })),
-    );
+    const suggestions: Array<{ name: string; value: string }> = [];
+
+    for (const file of files) {
+      if (!query || file.toLowerCase().includes(query)) {
+        suggestions.push({ name: `🎵 ${file}`.slice(0, 100), value: file });
+      }
+      if (suggestions.length >= 15) break;
+    }
+
+    for (const folder of folders) {
+      if (!query || folder.toLowerCase().includes(query)) {
+        suggestions.push({ name: `📁 ${folder}`.slice(0, 100), value: folder });
+      }
+      if (suggestions.length >= 25) break;
+    }
+
+    await interaction.respond(suggestions.slice(0, 25));
   } else if (focusedOption.name === 'folder') {
-    const folders = await listLocalFolders();
+    const folders = await listLocalFolders().catch(() => []);
     const query = (focusedOption.value || '').toLowerCase();
     const filtered = folders
       .filter((folder) => folder.toLowerCase().includes(query))
       .slice(0, 25);
 
     await interaction.respond(
-      filtered.map((folder) => ({ name: folder, value: folder })),
+      filtered.map((folder) => ({ name: `📁 ${folder}`, value: folder })),
     );
   } else if (focusedOption.name === 'name' && playlistManager) {
     const member = interaction.member as GuildMember;
@@ -1046,13 +1036,44 @@ export async function handleChatInputCommand(
         }
       }
 
-      // Check if user requested a whole folder
-      const folderOption = interaction.options.getString('folder')?.trim();
-      let input = interaction.options.getString('input') || interaction.options.getString('file');
-      input = input ? input.trim() : '';
+      // 1. Read universal song argument (maintaining backward-compatibility for mocks and tests)
+      const rawSong =
+        interaction.options.getString('song') ||
+        interaction.options.getString('query') ||
+        interaction.options.getString('input') ||
+        interaction.options.getString('file') ||
+        interaction.options.getString('folder');
 
-      const targetFolder = folderOption || (input && isAudioFolder(input) ? input : null);
-      if (targetFolder) {
+      let input = rawSong ? rawSong.trim() : '';
+
+      // If no input was provided:
+      if (!input) {
+        const curState = playbackManager.getState(guildId);
+        if (curState.playerState === 'PAUSED') {
+          await playbackManager.resume(guildId);
+          await interaction.editReply('▶️ Resumed playback.');
+          await refreshPanel(guildId, playbackManager).catch(() => {});
+          return;
+        }
+
+        const available = await listLocalAudioFiles();
+        if (available.length === 0) {
+          await interaction.editReply('No local audio files found in storage/music directory.');
+          return;
+        }
+        input = available[0];
+      }
+
+      // 2. Predict input type: 'link' | 'folder_path' | 'file_path' | 'song_name'
+      const prediction = predictAudioInputType(input);
+      logger.info(
+        { input, type: prediction.type, confidence: prediction.confidence },
+        '[PLAY] Universal input prediction',
+      );
+
+      // ── CASE A: FOLDER PATH ─────────────────────────────────────────────────
+      if (prediction.type === 'folder_path') {
+        const targetFolder = prediction.value;
         try {
           const userTag = member?.displayName || interaction.user.username;
           const addedTracks = await enqueueFolder(
@@ -1086,14 +1107,45 @@ export async function handleChatInputCommand(
         }
       }
 
-      // Determine single input to play
-      if (!input) {
-        const available = await listLocalAudioFiles();
-        if (available.length === 0) {
-          await interaction.editReply('No local audio files found in storage/music directory.');
+      // ── CASE B: SONG NAME (Search for songs matching song_name) ──────────────
+      if (prediction.type === 'song_name') {
+        const srcManager = audioSourceManager || createConfiguredAudioSourceManager();
+        const candidates = await searchSongsUniversally(input, {
+          audioSourceManager: srcManager,
+          trackManager,
+          limit: 10,
+        });
+
+        if (candidates.length === 0) {
+          await interaction.editReply(
+            `❌ No songs found matching "**${input}**". Please try another title or provide a direct link.`,
+          );
           return;
         }
-        input = available[0];
+
+        // If 2 or more songs found, give a list of songs from which the user can click which they want to play
+        if (candidates.length >= 2) {
+          const sessionId = `${guildId}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+          storeSongChoiceSession(sessionId, {
+            guildId,
+            userId,
+            userName: member?.displayName || interaction.user.username,
+            songName: input,
+            isPlayNext,
+            candidates,
+          });
+
+          const choiceMsg = buildSongChoiceMessage(input, candidates, sessionId, isPlayNext);
+          await interaction.editReply({
+            content: '',
+            embeds: choiceMsg.embeds,
+            components: choiceMsg.components,
+          });
+          return;
+        }
+
+        // Exactly 1 song found: proceed with this song's path / URL directly
+        input = candidates[0].sourceUrl;
       }
 
       // Handle Spotify Playlist or Album in /play

@@ -29,6 +29,7 @@ import {
   refreshPanel,
 } from './control-panel';
 import { handleQuickPlayInteraction, buildQuickPlayMenu } from './quickplay-menu';
+import { handleSongChoiceInteraction } from './song-selector';
 import type { VoiceReceiverManager } from '../voice';
 import { resolveAnyAudioInput } from '../audio/track-resolver';
 import { createConfiguredAudioSourceManager } from '../sources';
@@ -137,13 +138,19 @@ export async function createDiscordBot(
       logger.info('Global slash commands registered successfully');
 
       // Register commands directly to each joined guild for INSTANT availability (bypasses global cache delay)
-      for (const guild of readyClient.guilds.cache.values()) {
-        try {
-          await guild.commands.set(slashCommandDefinitions);
-          logger.info({ guildId: guild.id, name: guild.name }, 'Registered slash commands to guild immediately');
-        } catch (guildErr) {
-          logger.warn({ guildId: guild.id, err: guildErr }, 'Could not set guild slash commands directly');
+      try {
+        const oauthGuilds = await readyClient.guilds.fetch();
+        for (const [guildId, oauthGuild] of oauthGuilds) {
+          try {
+            const guild = await oauthGuild.fetch();
+            await guild.commands.set(slashCommandDefinitions);
+            logger.info({ guildId: guild.id, name: guild.name }, 'Registered slash commands to guild immediately');
+          } catch (guildErr) {
+            logger.warn({ guildId, err: guildErr }, 'Could not set guild slash commands directly');
+          }
         }
+      } catch (fetchErr) {
+        logger.warn({ err: fetchErr }, 'Could not fetch guilds for slash command registration');
       }
     } catch (cmdErr) {
       logger.error({ err: cmdErr }, 'Failed to register global slash commands');
@@ -220,6 +227,15 @@ export async function createDiscordBot(
           recordingManager,
           voiceReceiver,
         );
+      } else if (
+        (interaction.isButton() || interaction.isStringSelectMenu()) &&
+        (interaction.customId.startsWith('gakki:play_select:') || interaction.customId.startsWith('gakki:play_pick:'))
+      ) {
+        await handleSongChoiceInteraction(interaction, {
+          playbackManager: activeManager,
+          audioSourceManager,
+          trackManager,
+        });
       } else if (
         (interaction.isButton() || interaction.isStringSelectMenu()) &&
         interaction.customId.startsWith('gakki:qp:')

@@ -152,18 +152,45 @@ export class YouTubeSourceProvider implements MusicSourceProvider, MusicSearchPr
         source: { youtube: 'video' },
       });
 
-      return searchResults.map((item) => ({
-        title: item.title || 'Unknown Title',
-        artist: item.channel?.name || 'YouTube',
-        album: 'YouTube Music',
-        duration: item.durationInSec || null,
-        provider: this.name,
-        sourceUrl: item.url,
-        thumbnailUrl: item.thumbnails?.[0]?.url || null,
-        externalId: item.id || null,
-      }));
+      if (searchResults && searchResults.length > 0) {
+        return searchResults.map((item) => ({
+          title: item.title || 'Unknown Title',
+          artist: item.channel?.name || 'YouTube',
+          album: 'YouTube Music',
+          duration: item.durationInSec || null,
+          provider: this.name,
+          sourceUrl: item.url,
+          thumbnailUrl: item.thumbnails?.[0]?.url || null,
+          externalId: item.id || null,
+        }));
+      }
     } catch (err: any) {
-      logger.warn({ err, query: cleanQuery }, '[YOUTUBE] Search failed');
+      logger.warn({ err: err?.message || err, query: cleanQuery }, '[YOUTUBE] play.search failed, falling back to yt-dlp');
+    }
+
+    // Resilient fallback: yt-dlp search which is robust against YouTube parser changes
+    try {
+      const output = (await youtubedl(
+        `ytsearch${limit}:${cleanQuery}`,
+        getYtDlpFlags({ dumpSingleJson: true, flatPlaylist: true }),
+      )) as any;
+
+      const entries: any[] = output?.entries || [];
+      return entries.map((e) => ({
+        title: e.title || 'Unknown Title',
+        artist: e.uploader || e.channel || 'YouTube',
+        album: 'YouTube Music',
+        duration: e.duration || null,
+        provider: this.name,
+        sourceUrl: e.url || `https://www.youtube.com/watch?v=${e.id}`,
+        thumbnailUrl: e.thumbnail || (e.thumbnails?.[0]?.url) || null,
+        externalId: e.id || null,
+      }));
+    } catch (ytDlpErr: any) {
+      logger.error(
+        { err: ytDlpErr?.message || ytDlpErr, query: cleanQuery },
+        '[YOUTUBE] Search failed with both play-dl and yt-dlp',
+      );
       return [];
     }
   }

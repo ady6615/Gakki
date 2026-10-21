@@ -22,7 +22,9 @@
     "test:phase12": "tsx packages/server/src/__tests__/phase12.test.ts",
     "test:phase13": "tsx packages/server/src/__tests__/phase13.test.ts",
     "test:quickplay": "tsx packages/server/src/__tests__/__smart_history_quickplay.test.ts",
-    "test:navigation": "tsx packages/server/src/__tests__/navigation-seek.test.ts"
+    "test:navigation": "tsx packages/server/src/__tests__/navigation-seek.test.ts",
+    "test:universal-play": "tsx packages/server/src/__tests__/universal-play.test.ts",
+    "deploy:commands": "tsx packages/server/src/scripts/deploy-commands.ts"
   },
   "engines": {
     "node": ">=20.0.0"
