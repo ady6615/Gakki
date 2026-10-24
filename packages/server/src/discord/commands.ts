@@ -1,6 +1,10 @@
 import {
   SlashCommandBuilder,
   EmbedBuilder,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
+  ActionRowBuilder,
   type ChatInputCommandInteraction,
   type AutocompleteInteraction,
   type GuildMember,
@@ -94,25 +98,11 @@ export const slashCommandDefinitions = [
 
   new SlashCommandBuilder()
     .setName('play')
-    .setDescription('Play any song name, YouTube/Spotify link, folder, or file path')
-    .addStringOption((option) =>
-      option
-        .setName('song')
-        .setDescription('Song name (e.g. Bohemian Rhapsody), link (URL/Spotify), or file/folder path')
-        .setRequired(false)
-        .setAutocomplete(true),
-    ),
+    .setDescription('Play any song name, YouTube/Spotify link, folder, or file path'),
 
   new SlashCommandBuilder()
     .setName('playnext')
-    .setDescription('Play a song right after current song (top of queue)')
-    .addStringOption((option) =>
-      option
-        .setName('song')
-        .setDescription('Song name, link, or path to play next')
-        .setRequired(false)
-        .setAutocomplete(true),
-    ),
+    .setDescription('Play a song right after current song (top of queue)'),
 
   new SlashCommandBuilder()
     .setName('search')
@@ -748,7 +738,8 @@ export async function handleAutocomplete(
   if (
     focusedOption.name === 'song' ||
     focusedOption.name === 'file' ||
-    focusedOption.name === 'input'
+    focusedOption.name === 'input' ||
+    focusedOption.name === 'query'
   ) {
     const files = await listLocalAudioFiles().catch(() => []);
     const folders = await listLocalFolders().catch(() => []);
@@ -989,8 +980,62 @@ export async function handleChatInputCommand(
 
     case 'play':
     case 'playnext': {
-      await interaction.deferReply();
       const isPlayNext = commandName === 'playnext';
+
+      // 1. Read universal song argument (maintaining backward-compatibility for mocks, text commands, and tests)
+      const rawSong =
+        interaction.options?.getString?.('song') ||
+        interaction.options?.getString?.('query') ||
+        interaction.options?.getString?.('input') ||
+        interaction.options?.getString?.('file') ||
+        interaction.options?.getString?.('folder');
+
+      let input = rawSong ? rawSong.trim() : '';
+
+      // If no input was provided:
+      if (!input) {
+        // If player is currently paused, running /play directly resumes playback!
+        const curState = playbackManager.getState(guildId);
+        if (curState.playerState === 'PAUSED') {
+          await interaction.deferReply();
+          await playbackManager.resume(guildId);
+          await interaction.editReply('▶️ Resumed playback.');
+          await refreshPanel(guildId, playbackManager).catch(() => {});
+          return;
+        }
+
+        // If interaction can open modal (Discord slash command without options), pop up the input modal!
+        if (typeof (interaction as any).showModal === 'function') {
+          const modal = new ModalBuilder()
+            .setCustomId(isPlayNext ? 'gakki:playnext_modal' : 'gakki:play_modal')
+            .setTitle(isPlayNext ? '⏩ Play Next (Top of Queue)' : '🎵 Play Song or Audio URL');
+
+          const inputField = new TextInputBuilder()
+            .setCustomId(isPlayNext ? 'gakki:playnext_input' : 'gakki:play_input')
+            .setLabel('Song title, link, file, or folder')
+            .setPlaceholder('e.g. Bohemian Rhapsody, Spotify/YouTube link, folder/path')
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true)
+            .setMaxLength(300);
+
+          modal.addComponents(
+            new ActionRowBuilder<TextInputBuilder>().addComponents(inputField),
+          );
+
+          await (interaction as any).showModal(modal);
+          return;
+        }
+
+        await interaction.deferReply();
+        const available = await listLocalAudioFiles();
+        if (available.length === 0) {
+          await interaction.editReply('No local audio files found in storage/music directory.');
+          return;
+        }
+        input = available[0];
+      } else {
+        await interaction.deferReply();
+      }
 
       // Rate limiting
       const userId = member?.user?.id || member?.id || 'anonymous';
@@ -1034,34 +1079,6 @@ export async function handleChatInputCommand(
           await interaction.editReply(`Failed to join voice channel: ${(error as Error).message}`);
           return;
         }
-      }
-
-      // 1. Read universal song argument (maintaining backward-compatibility for mocks and tests)
-      const rawSong =
-        interaction.options.getString('song') ||
-        interaction.options.getString('query') ||
-        interaction.options.getString('input') ||
-        interaction.options.getString('file') ||
-        interaction.options.getString('folder');
-
-      let input = rawSong ? rawSong.trim() : '';
-
-      // If no input was provided:
-      if (!input) {
-        const curState = playbackManager.getState(guildId);
-        if (curState.playerState === 'PAUSED') {
-          await playbackManager.resume(guildId);
-          await interaction.editReply('▶️ Resumed playback.');
-          await refreshPanel(guildId, playbackManager).catch(() => {});
-          return;
-        }
-
-        const available = await listLocalAudioFiles();
-        if (available.length === 0) {
-          await interaction.editReply('No local audio files found in storage/music directory.');
-          return;
-        }
-        input = available[0];
       }
 
       // 2. Predict input type: 'link' | 'folder_path' | 'file_path' | 'song_name'

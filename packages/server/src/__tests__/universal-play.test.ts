@@ -234,42 +234,33 @@ async function runUniversalPlayTests() {
   // ── TEST 1: SlashCommandBuilder Definitions ──
   console.log('Test Group 1: Slash Command Definitions (/play & /playnext)');
 
-  test('/play command exists and has single "song" option', () => {
+  test('/play command exists with no options (clean /play)', () => {
     const playCmd = slashCommandDefinitions.find((c) => c.name === 'play');
     assert(playCmd, '/play command must be registered');
     const json = playCmd.toJSON();
 
-    // Check options
-    assert(json.options && json.options.length === 1, `Expected exactly 1 option on /play, got ${json.options?.length}`);
-    const option = json.options[0];
-    assert.strictEqual(option.name, 'song', 'The single option on /play must be named "song"');
-    assert.strictEqual(option.required, false, 'song option is optional');
+    // Check options: only /play with no extra options
+    assert(!json.options || json.options.length === 0, `Expected 0 options on /play, got ${json.options?.length}`);
   });
 
-  test('/play command has removed "input", "folder", and "file" options', () => {
+  test('/play command has removed "song", "input", "folder", and "file" options', () => {
     const playCmd = slashCommandDefinitions.find((c) => c.name === 'play');
     assert(playCmd);
     const json = playCmd.toJSON();
     const optionNames = (json.options || []).map((o: any) => o.name);
 
+    assert(!optionNames.includes('song'), 'Option "song" must be removed from /play');
     assert(!optionNames.includes('input'), 'Option "input" must be removed from /play');
     assert(!optionNames.includes('folder'), 'Option "folder" must be removed from /play');
     assert(!optionNames.includes('file'), 'Option "file" must be removed from /play');
   });
 
-  test('/playnext command exists and has single "song" option', () => {
+  test('/playnext command exists with no options (clean /playnext)', () => {
     const playNextCmd = slashCommandDefinitions.find((c) => c.name === 'playnext');
     assert(playNextCmd, '/playnext command must be registered');
     const json = playNextCmd.toJSON();
 
-    assert(json.options && json.options.length === 1, `Expected exactly 1 option on /playnext, got ${json.options?.length}`);
-    const option = json.options[0];
-    assert.strictEqual(option.name, 'song', 'The single option on /playnext must be named "song"');
-
-    const optionNames = (json.options || []).map((o: any) => o.name);
-    assert(!optionNames.includes('input'), 'Option "input" must be removed from /playnext');
-    assert(!optionNames.includes('folder'), 'Option "folder" must be removed from /playnext');
-    assert(!optionNames.includes('file'), 'Option "file" must be removed from /playnext');
+    assert(!json.options || json.options.length === 0, `Expected 0 options on /playnext, got ${json.options?.length}`);
   });
 
   // ── TEST 2: Input Prediction ──

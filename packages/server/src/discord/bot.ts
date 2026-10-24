@@ -260,84 +260,42 @@ export async function createDiscordBot(
         const isPlayNext = interaction.customId === 'gakki:playnext_modal';
         const input = await handleControlPanelModal(interaction);
         if (input && interaction.guildId) {
-          await interaction.deferReply();
+          const modalCmdInteraction = {
+            ...interaction,
+            isChatInputCommand: () => true,
+            commandName: isPlayNext ? 'playnext' : 'play',
+            deferReply: (opts?: any) => interaction.deferReply(opts),
+            editReply: (opts: any) => interaction.editReply(opts),
+            reply: (opts: any) => interaction.reply(opts),
+            followUp: (opts: any) => interaction.followUp(opts),
+            options: {
+              getString: (name: string) => input,
+              getInteger: () => null,
+              getBoolean: () => null,
+              getNumber: () => null,
+              getUser: () => null,
+              getChannel: () => null,
+              getRole: () => null,
+              getMentionable: () => null,
+              getSubcommand: () => null,
+              getSubcommandGroup: () => null,
+            },
+          };
 
-          const guildId = interaction.guildId;
-          const guild = interaction.guild ?? (await interaction.client.guilds.fetch(guildId).catch(() => null));
-          let member = interaction.member as import('discord.js').GuildMember;
-          if ((!member || !member.voice) && guild) {
-            member = (await guild.members.fetch(interaction.user.id).catch(() => member)) as any;
-          }
-
-          const userVoiceChannel = member?.voice?.channel;
-
-          // Auto-join voice if not connected
-          const currentState = activeManager.getState(guildId);
-          if (currentState.voiceState !== 'CONNECTED') {
-            if (!userVoiceChannel) {
-              await interaction.editReply('You must be in a voice channel to play music.');
-              return;
-            }
-            try {
-              await activeManager.join(guildId, userVoiceChannel.id);
-            } catch (error) {
-              await interaction.editReply(`Failed to join voice channel: ${(error as Error).message}`);
-              return;
-            }
-          }
-
-          // Resolve the input and play it
-          try {
-            const srcManager = audioSourceManager || createConfiguredAudioSourceManager();
-            const resolved = await resolveAnyAudioInput(input, srcManager, trackManager);
-
-            let source;
-            if (resolved.path.startsWith('http://') || resolved.path.startsWith('https://')) {
-              const { HttpAudioSource } = await import('@gakki/core');
-              source = new HttpAudioSource(resolved.path, {
-                title: resolved.name,
-                artist: resolved.artist ?? null,
-                album: resolved.album ?? null,
-                duration: resolved.duration ?? null,
-              });
-            } else {
-              const { LocalAudioSource } = await import('@gakki/core');
-              source = new LocalAudioSource(resolved.path, undefined, probeAudioMetadata);
-            }
-
-            const playResult = await activeManager.play(guildId, source, {
-              name: resolved.name,
-              path: resolved.path,
-              duration: resolved.duration ?? undefined,
-              artist: resolved.artist,
-              album: resolved.album,
-              thumbnailUrl: resolved.thumbnailUrl,
-              sourceProvider: resolved.sourceProvider || 'Local Library',
-              sourceUrl: input,
-              addedBy: member?.displayName || interaction.user.username,
-              userId: interaction.user.id,
-            }, { playNext: isPlayNext });
-
-            const durationStr = formatDuration(resolved.duration);
-            if (playResult.status === 'started') {
-              await interaction.editReply(
-                `▶️ Now playing: **${resolved.name}**${resolved.artist ? ` by **${resolved.artist}**` : ''} \`[${durationStr}]\``,
-              );
-            } else {
-              if (isPlayNext) {
-                await interaction.editReply(
-                  `⏩ Added to play next at position **#${playResult.position}**: **${resolved.name}** \`[${durationStr}]\` (plays after current song)`,
-                );
-              } else {
-                await interaction.editReply(
-                  `➕ Added to queue at position **#${playResult.position}**: **${resolved.name}** \`[${durationStr}]\``,
-                );
-              }
-            }
-            await refreshPanel(guildId, activeManager).catch(() => {});
-          } catch (err: any) {
-            await interaction.editReply(`❌ Could not play: ${err.message}`);
-          }
+          await handleChatInputCommand(
+            modalCmdInteraction as any,
+            activeManager,
+            audioSourceManager,
+            analyticsManager,
+            playlistManager,
+            trackManager,
+            recManager,
+            lyricsManager,
+            favoritesManager,
+            recordingManager,
+            voiceReceiver,
+          );
+          return;
         }
       }
     } catch (err) {
@@ -381,15 +339,105 @@ export async function createDiscordBot(
     }
   });
 
-  // Listen for text triggers: bot mention (@Gakki), !panel, !gakki, !menu
+  // Listen for text triggers: bot mention (@Gakki), !panel, !gakki, !menu, /play, !play
   client.on('messageCreate', async (message) => {
     if (!activeManager || message.author.bot || !message.guildId) return;
 
     const botId = client?.user?.id;
     const isMentioned = botId && message.mentions.users.has(botId);
-    const content = message.content.trim().toLowerCase();
+    const rawContent = message.content.trim();
+    const content = rawContent.toLowerCase();
     const isMenuTrigger = isMentioned || content === '!gakki' || content === '!menu' || content === '!quickplay';
     const isPanelTrigger = content === '!panel' || content === '!control' || content === '!player';
+
+    // Support text commands: /play, !play, /playnext, !playnext directly in chat without typing "song"
+    const isPlayMatch = /^(\/|!)play(\s+.*)?$/i.test(rawContent);
+    const isPlayNextMatch = /^(\/|!)playnext(\s+.*)?$/i.test(rawContent);
+
+    if (isPlayMatch || isPlayNextMatch) {
+      const isPlayNext = isPlayNextMatch;
+      let query = rawContent.replace(/^(\/|!)play(next)?\s*/i, '').trim();
+      // If user typed "song <query>", strip the extra "song " word too
+      if (/^song\s+/i.test(query)) {
+        query = query.replace(/^song\s+/i, '').trim();
+      }
+
+      let replyMsg: any = null;
+      const textInteraction = {
+        isChatInputCommand: () => true,
+        commandName: isPlayNext ? 'playnext' : 'play',
+        guildId: message.guildId,
+        guild: message.guild,
+        channel: message.channel,
+        member: message.member,
+        user: message.author,
+        client: message.client,
+        deferReply: async () => {
+          if ('sendTyping' in message.channel) {
+            await message.channel.sendTyping().catch(() => {});
+          }
+        },
+        editReply: async (options: any) => {
+          const payload = typeof options === 'string' ? { content: options } : options;
+          if (replyMsg) {
+            return await replyMsg.edit(payload);
+          } else {
+            replyMsg = await message.channel.send(payload);
+            return replyMsg;
+          }
+        },
+        reply: async (options: any) => {
+          const payload = typeof options === 'string' ? { content: options } : options;
+          if (replyMsg) {
+            return await replyMsg.edit(payload);
+          } else {
+            replyMsg = await message.channel.send(payload);
+            return replyMsg;
+          }
+        },
+        followUp: async (options: any) => {
+          const payload = typeof options === 'string' ? { content: options } : options;
+          return await message.channel.send(payload);
+        },
+        options: {
+          getString: (name: string) => {
+            if (name === 'song' || name === 'query' || name === 'input' || name === 'file' || name === 'folder') {
+              return query || null;
+            }
+            return null;
+          },
+          getInteger: () => null,
+          getBoolean: () => null,
+          getNumber: () => null,
+          getUser: () => null,
+          getChannel: () => null,
+          getRole: () => null,
+          getMentionable: () => null,
+          getSubcommand: () => null,
+          getSubcommandGroup: () => null,
+        },
+      };
+
+      try {
+        await handleChatInputCommand(
+          textInteraction as any,
+          activeManager,
+          audioSourceManager,
+          analyticsManager,
+          playlistManager,
+          trackManager,
+          recManager,
+          lyricsManager,
+          favoritesManager,
+          recordingManager,
+          voiceReceiver,
+        );
+      } catch (err: any) {
+        logger.error({ err, guildId: message.guildId }, 'Failed to execute text play command');
+        await message.channel.send(`❌ Playback failed: ${err.message}`).catch(() => {});
+      }
+      return;
+    }
 
     if (isMenuTrigger) {
       try {
