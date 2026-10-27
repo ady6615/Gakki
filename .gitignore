@@ -14,3 +14,15 @@ packages/server/storage/
 *.exe
 assets/gakki_bot_logo.ai
 
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Vite build timestamps
+*.timestamp-*.mjs
+
+# Temporary test audio directories & preview outputs
+packages/server/src/__tests__/test_audio_cache/
+packages/server/src/__tests__/test_media_phase5/
+storage/evaluation/previews/
