@@ -4,7 +4,7 @@
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'guild_settings' AND column_name = 'transition_enabled') THEN
-    ALTER TABLE guild_settings ADD COLUMN transition_enabled BOOLEAN NOT NULL DEFAULT TRUE;
+    ALTER TABLE guild_settings ADD COLUMN transition_enabled BOOLEAN NOT NULL DEFAULT FALSE;
   END IF;
 
   IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'guild_settings' AND column_name = 'transition_duration') THEN

@@ -47,7 +47,7 @@ export const guildSettings = pgTable('guild_settings', {
   loopMode: varchar('loop_mode', { length: 20 }).notNull().default('off'),
   stayInChannel: boolean('stay_in_channel').notNull().default(false),
   voiceIdleTimeout: integer('voice_idle_timeout').notNull().default(300),
-  transitionEnabled: boolean('transition_enabled').notNull().default(true),
+  transitionEnabled: boolean('transition_enabled').notNull().default(false),
   transitionDuration: integer('transition_duration').notNull().default(6),
   transitionProfile: varchar('transition_profile', { length: 32 }).notNull().default('BALANCED'),
   harmonicMixing: boolean('harmonic_mixing').notNull().default(true),

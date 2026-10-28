@@ -27,6 +27,7 @@ import type {
   VoiceLifecycleUpdatedEvent,
 } from '../types/queue';
 import type { Readable } from 'node:stream';
+import * as fs from 'node:fs';
 import { QueueManager } from './queue.manager';
 import { VoiceLifecycleManager } from './voice-lifecycle.manager';
 import type { GuildSettingsManager } from './guild-settings.manager';
@@ -109,6 +110,7 @@ export class PlaybackManager {
   private readonly guildStemSettings = new Map<string, GuildStemSettings>();
   private readonly preparedTransitions = new Map<string, { plan: TransitionPlan; nextTrack: QueueTrack; source: AudioSource }>();
   private readonly isPreparingTransition = new Map<string, boolean>();
+  private readonly failedTransitionTracks = new Set<string>();
   private lookaheadInterval: NodeJS.Timeout | null = null;
   private readonly transitionEventListeners = new Set<(event: any) => void>();
 
@@ -221,7 +223,7 @@ export class PlaybackManager {
           this.voiceLifecycleManager.setTimeoutSeconds(guildId, s.voiceIdleTimeout);
           this.guildTransitions.set(guildId, {
             guildId,
-            transitionEnabled: s.transitionEnabled ?? true,
+            transitionEnabled: s.transitionEnabled ?? false,
             transitionDuration: s.transitionDuration ?? 6,
             transitionProfile: s.transitionProfile ?? 'BALANCED',
             harmonicMixing: s.harmonicMixing ?? true,
@@ -360,7 +362,7 @@ export class PlaybackManager {
     this.voiceLifecycleManager.setTimeoutSeconds(guildId, settings.voiceIdleTimeout);
     this.guildTransitions.set(guildId, {
       guildId,
-      transitionEnabled: settings.transitionEnabled ?? true,
+      transitionEnabled: settings.transitionEnabled ?? false,
       transitionDuration: settings.transitionDuration ?? 6,
       transitionProfile: settings.transitionProfile ?? 'BALANCED',
       harmonicMixing: settings.harmonicMixing ?? true,
@@ -402,6 +404,10 @@ export class PlaybackManager {
     if (adapter.onTrackEnd) {
       adapter.onTrackEnd(async (guildId) => {
         const reason = this.endReasons.get(guildId) || 'finished';
+        const finishedTrack = this.currentTracks.get(guildId);
+        if (finishedTrack) {
+          this.failedTransitionTracks.delete(`${guildId}:${finishedTrack.id}`);
+        }
         await this.finalizePlaybackEvent(guildId, reason);
 
         if (reason === 'finished') {
@@ -1496,7 +1502,7 @@ export class PlaybackManager {
     if (existing) return existing;
     const defaults: GuildTransitionSettings = {
       guildId,
-      transitionEnabled: true,
+      transitionEnabled: false,
       transitionDuration: 6,
       transitionProfile: 'BALANCED',
       harmonicMixing: true,
@@ -1618,6 +1624,30 @@ export class PlaybackManager {
 
     const settings = this.getTransitionSettings(guildId);
     if (!settings.transitionEnabled) return null;
+
+    const trackKey = `${guildId}:${currentTrack.id}`;
+    if (this.failedTransitionTracks.has(trackKey)) return null;
+
+    // FFmpeg multi-input stream transition requires valid local audio files on disk.
+    // Remote streams (YouTube, Spotify, HTTP URLs) or search queries cannot be directly seeked/crossfaded by FFmpeg.
+    // Skip transition gracefully so songs play completely to the end without premature clipping.
+    if (!currentTrack.path || !nextTrack.path) return null;
+    if (
+      currentTrack.path.startsWith('http://') ||
+      currentTrack.path.startsWith('https://') ||
+      currentTrack.path.startsWith('ytsearch:') ||
+      nextTrack.path.startsWith('http://') ||
+      nextTrack.path.startsWith('https://') ||
+      nextTrack.path.startsWith('ytsearch:') ||
+      !fs.existsSync(currentTrack.path) ||
+      !fs.existsSync(nextTrack.path)
+    ) {
+      this.logger.debug(
+        { guildId, from: currentTrack.path, to: nextTrack.path },
+        '[DJ] Transition skipped: tracks are remote streams or not local audio files',
+      );
+      return null;
+    }
 
     this.isPreparingTransition.set(guildId, true);
 
@@ -1796,6 +1826,9 @@ export class PlaybackManager {
         continue;
       }
 
+      const settings = this.getTransitionSettings(guildId);
+      if (!settings.transitionEnabled) continue;
+
       const status = this.adapter.getPlaybackStatus(guildId);
       if (status !== 'PLAYING') continue;
 
@@ -1844,21 +1877,21 @@ export class PlaybackManager {
           profile: prepared.plan.profile,
         });
 
-        // Dequeue next track from queue
-        const loopMode = this.getLoopMode(guildId);
-        if (loopMode === 'queue') {
-          this.queueManager.addTrack(guildId, currentTrack);
-        }
-        this.queueManager.getNext(guildId);
-
-        // Handoff to transition stream
-        this.currentTracks.set(guildId, prepared.nextTrack);
-        this.preparedTransitions.delete(guildId);
-
         try {
           await this.adapter.play(guildId, prepared.source, {
             volume: this.getVolume(guildId),
           });
+
+          // Dequeue next track from queue ONLY after handoff play starts successfully
+          const loopMode = this.getLoopMode(guildId);
+          if (loopMode === 'queue') {
+            this.queueManager.addTrack(guildId, currentTrack);
+          }
+          this.queueManager.getNext(guildId);
+
+          // Handoff to transition stream
+          this.currentTracks.set(guildId, prepared.nextTrack);
+          this.preparedTransitions.delete(guildId);
 
           this.emitTransitionEvent({
             type: 'transition.completed',
@@ -1868,13 +1901,15 @@ export class PlaybackManager {
 
           this.emitQueueUpdate(guildId);
         } catch (err: any) {
-          this.logger.error({ err, guildId }, '[DJ] Transition handoff failed, falling back to standard track playback');
+          this.logger.error({ err, guildId }, '[DJ] Transition handoff failed, allowing current track to finish naturally');
+          this.preparedTransitions.delete(guildId);
+          this.failedTransitionTracks.add(`${guildId}:${currentTrack.id}`);
           this.emitTransitionEvent({
             type: 'transition.failed',
             guildId,
             error: err.message,
           });
-          await this.advanceQueue(guildId);
+          // Do NOT advance queue! The current track continues playing until it naturally ends.
         }
       }
     }

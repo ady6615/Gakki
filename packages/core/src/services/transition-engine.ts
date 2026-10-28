@@ -58,7 +58,7 @@ export class TransitionEngine {
 
     const profileName: TransitionProfile = settings?.transitionProfile ?? 'BALANCED';
     const profileConfig = TRANSITION_PROFILES[profileName] || TRANSITION_PROFILES.BALANCED;
-    const isTransitionEnabled = settings?.transitionEnabled ?? true;
+    const isTransitionEnabled = settings?.transitionEnabled ?? false;
 
     // Check if transition is explicitly disabled
     if (!isTransitionEnabled) {

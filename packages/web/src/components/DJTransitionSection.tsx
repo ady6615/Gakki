@@ -56,7 +56,7 @@ export function DJTransitionSection() {
   const [guildId, setGuildId] = useState<string>('default-guild');
   const [settings, setSettings] = useState<TransitionSettings>({
     guildId: 'default-guild',
-    transitionEnabled: true,
+    transitionEnabled: false,
     transitionDuration: 6,
     transitionProfile: 'BALANCED',
     harmonicMixing: true,
