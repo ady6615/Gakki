@@ -391,6 +391,10 @@ export const slashCommandDefinitions = [
     .setDescription('Shuffle all tracks currently in the queue'),
 
   new SlashCommandBuilder()
+    .setName('reverse')
+    .setDescription('Reverse the playback queue upside down so songs play in opposite order'),
+
+  new SlashCommandBuilder()
     .setName('remove')
     .setDescription('Remove a track from the queue by its position number')
     .addIntegerOption((option) =>
@@ -1961,6 +1965,28 @@ export async function handleChatInputCommand(
       } else {
         await interaction.reply({
           content: 'Could not shuffle the queue.',
+          ephemeral: true,
+        });
+      }
+      break;
+    }
+
+    case 'reverse': {
+      const count = playbackManager.queueManager.getQueueLength(guildId);
+      if (count <= 1) {
+        await interaction.reply({
+          content: 'Not enough tracks in the queue to reverse.',
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const reversed = playbackManager.reverseQueue(guildId);
+      if (reversed) {
+        await interaction.reply(`🔃 Reversed **${count}** tracks in the queue! Songs will now play in opposite order.`);
+      } else {
+        await interaction.reply({
+          content: 'Could not reverse the queue.',
           ephemeral: true,
         });
       }

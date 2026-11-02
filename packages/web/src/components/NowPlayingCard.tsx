@@ -201,6 +201,16 @@ export function NowPlayingCard({
     }
   };
 
+  const handleReverse = async () => {
+    if (!guildId) return;
+    try {
+      await fetch(`/api/playback/${guildId}/reverse`, { method: 'POST' });
+      onRefreshQueue?.();
+    } catch {
+      // ignore
+    }
+  };
+
   const handleToggleFavorite = async () => {
     if (!activeTrack?.id) return;
     const nextState = !isFavorite;
@@ -545,6 +555,16 @@ export function NowPlayingCard({
           title="Shuffle remaining queue"
         >
           🔀
+        </button>
+
+        <button
+          className="control-btn"
+          onClick={handleReverse}
+          disabled={!queueState.queue || queueState.queue.length <= 1}
+          aria-label="Reverse queue"
+          title="Reverse remaining queue upside down"
+        >
+          🔃
         </button>
 
         {/* Volume & Mute Control */}

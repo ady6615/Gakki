@@ -2590,6 +2590,37 @@ body {
   transform: none;
 }
 
+.reverse-queue-btn {
+  background: transparent;
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  color: #818cf8;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.25rem 0.65rem;
+  border-radius: 6px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.reverse-queue-btn:hover:not(:disabled) {
+  background: rgba(99, 102, 241, 0.18);
+  border-color: rgba(99, 102, 241, 0.55);
+  transform: translateY(-1px);
+}
+
+.reverse-queue-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #94a3b8;
+  background: transparent;
+  transform: none;
+}
+
 .pinned-now-playing {
   background: rgba(124, 92, 252, 0.1);
   border: 1px solid rgba(124, 92, 252, 0.25);

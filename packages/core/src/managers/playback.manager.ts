@@ -1109,6 +1109,17 @@ export class PlaybackManager {
   }
 
   /**
+   * Reverse queued tracks for the current guild upside down.
+   */
+  reverseQueue(guildId: string): boolean {
+    const reversed = this.queueManager.reverse(guildId);
+    if (reversed) {
+      this.emitQueueUpdate(guildId);
+    }
+    return reversed;
+  }
+
+  /**
    * Remove a track from the queue by its 1-based position.
    */
   removeQueueTrack(guildId: string, index: number): QueueTrack | null {

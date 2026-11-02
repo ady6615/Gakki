@@ -206,6 +206,25 @@ export function playbackRoutes(manager?: PlaybackManager | AudioPlayerManager): 
   });
 
   /**
+   * POST /api/playback/:guildId/reverse
+   * Reverse queued tracks for a guild upside down.
+   */
+  router.post('/:guildId/reverse', (req, res) => {
+    const { guildId } = req.params;
+    if (!activePlaybackManager) {
+      res.status(503).json({ success: false, error: 'Playback manager not initialized' });
+      return;
+    }
+
+    const reversed = activePlaybackManager.reverseQueue(guildId);
+    res.json({
+      success: true,
+      reversed,
+      queueLength: activePlaybackManager.queueManager.getQueueLength(guildId),
+    });
+  });
+
+  /**
    * POST /api/playback/:guildId/move
    * Move track from one 1-based index to another.
    */

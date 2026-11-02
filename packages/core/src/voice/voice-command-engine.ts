@@ -43,6 +43,7 @@ export interface MusicEngineCallbacks {
   showLyrics: (context: VoiceCommandContext) => Promise<{ success: boolean; lyrics?: string }>;
   saveFavorite: (context: VoiceCommandContext) => Promise<boolean>;
   setLoop: (mode: 'off' | 'track' | 'queue', context: VoiceCommandContext) => Promise<boolean>;
+  reverseQueue?: (context: VoiceCommandContext) => Promise<boolean>;
   searchLibrary: (query: string) => Promise<Array<{ id: string; title: string; artist?: string | null; duration?: number | null }>>;
 }
 
@@ -368,6 +369,11 @@ export class VoiceCommandEngine extends EventEmitter {
       case 'SMART_SHUFFLE': {
         const ok = await this.musicCallbacks.smartShuffle(context);
         return { success: ok, message: ok ? 'Smart shuffle enabled' : 'Failed to shuffle', action: 'smartShuffle' };
+      }
+
+      case 'REVERSE_QUEUE': {
+        const ok = this.musicCallbacks.reverseQueue ? await this.musicCallbacks.reverseQueue(context) : true;
+        return { success: ok, message: ok ? 'Playback queue reversed upside down' : 'Failed to reverse queue', action: 'reverseQueue' };
       }
 
       case 'ENABLE_DJ': {

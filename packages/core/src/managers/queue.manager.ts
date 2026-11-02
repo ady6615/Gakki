@@ -1,6 +1,7 @@
 import type { Logger } from 'pino';
 import { randomUUID } from 'node:crypto';
 import type { GuildQueue, QueueTrack, QueueDisplayItem } from '../types/queue';
+import { createLogger } from '../utils/logger';
 
 type QueueChangeListener = (guildId: string, queue: GuildQueue) => void;
 
@@ -15,7 +16,7 @@ export class QueueManager {
   private readonly queues = new Map<string, GuildQueue>();
   private readonly changeListeners = new Set<QueueChangeListener>();
 
-  constructor(private readonly logger: Logger) {
+  constructor(private readonly logger: Logger = createLogger('queue-manager')) {
     this.logger.debug('QueueManager initialized');
   }
 
@@ -390,6 +391,28 @@ export class QueueManager {
     this.logger.info(
       { guildId, trackCount: queue.tracks.length },
       '[QUEUE] Shuffled',
+    );
+    this.notifyChange(guildId);
+    return true;
+  }
+
+  /**
+   * Reverse the queued tracks for the guild upside down (plays in opposite order).
+   * Does NOT touch the currently playing track.
+   * Returns true if reversed, false if queue has 0 or 1 tracks.
+   */
+  reverse(guildId: string): boolean {
+    const queue = this.queues.get(guildId);
+    if (!queue || queue.tracks.length <= 1) {
+      return false;
+    }
+
+    queue.tracks.reverse();
+
+    this.logger.info(
+      { guildId, trackCount: queue.tracks.length },
+      '[QUEUE] Reversed queue upside down (%d tracks)',
+      queue.tracks.length,
     );
     this.notifyChange(guildId);
     return true;

@@ -366,5 +366,21 @@ export function queueRoutes(
     res.json(authoritativeEvent);
   });
 
+  /**
+   * POST /api/queue/:guildId/reverse
+   * Reverse queued tracks upside down so songs play in opposite order.
+   */
+  router.post('/:guildId/reverse', (req, res) => {
+    const { guildId } = req.params;
+    if (!playbackManager) {
+      res.status(503).json({ error: 'Playback manager not initialized.' });
+      return;
+    }
+
+    const reversed = playbackManager.reverseQueue(guildId);
+    const authoritativeEvent = playbackManager.getQueueEvent(guildId);
+    res.json({ reversed, ...authoritativeEvent });
+  });
+
   return router;
 }

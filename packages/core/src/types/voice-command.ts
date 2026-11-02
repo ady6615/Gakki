@@ -15,6 +15,7 @@ export type VoiceIntentType =
   | 'SET_VOLUME'
   | 'SHUFFLE'
   | 'SMART_SHUFFLE'
+  | 'REVERSE_QUEUE'
   | 'ENABLE_DJ'
   | 'DISABLE_DJ'
   | 'NEXT'

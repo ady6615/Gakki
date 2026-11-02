@@ -444,6 +444,10 @@ async function main(): Promise<void> {
       }
       return true;
     },
+    reverseQueue: async (context) => {
+      const gid = context.guildId || 'desktop-local';
+      return playbackManager.reverseQueue(gid);
+    },
     searchLibrary: async (query) => {
       try {
         const results = await audioSourceManager.search(query, { limit: 5 });

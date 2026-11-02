@@ -287,6 +287,17 @@ export function QueueSection({ queueState, guildId, onRefresh }: QueueSectionPro
     }
   };
 
+  // Reverse queue
+  const handleReverse = async () => {
+    if (!guildId || localQueue.length <= 1) return;
+    try {
+      await fetch(`/api/queue/${guildId}/reverse`, { method: 'POST' });
+      onRefresh?.();
+    } catch {
+      // ignore
+    }
+  };
+
   return (
     <section className="queue-container glass-panel" aria-label="Playback Queue Management">
       <div className="queue-header-bar">
@@ -298,15 +309,26 @@ export function QueueSection({ queueState, guildId, onRefresh }: QueueSectionPro
             {localQueue.length} {localQueue.length === 1 ? 'track' : 'tracks'}
           </span>
         </div>
-        <button
-          className="clear-queue-btn"
-          onClick={handleClear}
-          disabled={localQueue.length === 0}
-          aria-label="Clear all tracks in queue"
-          title={localQueue.length === 0 ? 'Queue is empty' : 'Clear all tracks in queue'}
-        >
-          🧹 Clear Queue
-        </button>
+        <div className="queue-header-actions" style={{ display: 'flex', gap: '8px' }}>
+          <button
+            className="reverse-queue-btn"
+            onClick={handleReverse}
+            disabled={localQueue.length <= 1}
+            aria-label="Reverse queue upside down"
+            title={localQueue.length <= 1 ? 'Need at least 2 tracks to reverse' : 'Reverse queue upside down'}
+          >
+            🔃 Reverse
+          </button>
+          <button
+            className="clear-queue-btn"
+            onClick={handleClear}
+            disabled={localQueue.length === 0}
+            aria-label="Clear all tracks in queue"
+            title={localQueue.length === 0 ? 'Queue is empty' : 'Clear all tracks in queue'}
+          >
+            🧹 Clear Queue
+          </button>
+        </div>
       </div>
 
       {/* Quick Play & Local File Ingestion Bar */}

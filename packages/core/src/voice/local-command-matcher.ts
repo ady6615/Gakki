@@ -154,6 +154,14 @@ export class LocalCommandMatcher {
         isConversational: false,
       };
     }
+    if (lower.match(/^(?:reverse|reverse\s+queue|flip\s+queue|invert\s+queue)$/i)) {
+      return {
+        intent: 'REVERSE_QUEUE',
+        confidence: 0.98,
+        rawTranscript: transcript,
+        isConversational: false,
+      };
+    }
 
     // 8. ENABLE / DISABLE DJ
     if (lower.match(/^(?:enable\s+dj|turn\s+on\s+dj|start\s+dj|dj\s+on)$/i)) {

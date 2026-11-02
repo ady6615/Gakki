@@ -551,6 +551,12 @@ export const VoiceCommandSection: React.FC = () => {
                       </button>
                       <button
                         className="quick-chip"
+                        onClick={() => handleExecuteCommand('Hey Gakki, reverse queue')}
+                      >
+                        🔃 Reverse Queue
+                      </button>
+                      <button
+                        className="quick-chip"
                         onClick={() => handleExecuteCommand('Hey Gakki, enable dj')}
                       >
                         🎧 Enable DJ

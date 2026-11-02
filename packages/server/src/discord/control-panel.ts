@@ -68,6 +68,7 @@ const EMOJI = {
   ADD: '➕',
   PLAYNEXT: '⏩',
   CLEAR: '🧹',
+  REVERSE: '🔃',
 } as const;
 
 // ─── Progress Bar Helpers ────────────────────────────────────────────────────
@@ -472,11 +473,23 @@ function buildComponentRows(
           emoji: '🔥',
           description: 'Set maximum 200% amplification',
         },
+        {
+          label: '🔃 Reverse Queue (Opposite Order)',
+          value: 'queue_reverse',
+          emoji: '🔃',
+          description: 'Reverse queue upside down so songs play in opposite order',
+        },
       ),
   );
 
-  // ── Row 5: Voice Session Control ─────────────────────────────────────────
+  // ── Row 5: Queue & Voice Session Controls ───────────────────────────────
   const row5 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId('gakki:reverse')
+      .setEmoji(EMOJI.REVERSE)
+      .setLabel('Reverse')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(queueLength < 2),
     new ButtonBuilder()
       .setCustomId('gakki:disconnect')
       .setEmoji(EMOJI.DISCONNECT)
@@ -893,6 +906,24 @@ export async function handleControlPanelButton(
         break;
       }
 
+      // ── Reverse Queue ──────────────────────────────────────────────
+      case 'gakki:reverse': {
+        const count = playbackManager.queueManager.getQueueLength(guildId);
+        if (count >= 2) {
+          playbackManager.reverseQueue(guildId);
+          await interaction.reply({
+            content: `${EMOJI.REVERSE} Reversed **${count}** tracks in the queue! Songs will now play in opposite order.`,
+            ephemeral: true,
+          });
+        } else {
+          await interaction.reply({
+            content: 'Need at least 2 tracks in the queue to reverse.',
+            ephemeral: true,
+          });
+        }
+        break;
+      }
+
       // ── Loop Cycle ─────────────────────────────────────────────────
       case 'gakki:loop_cycle': {
         const current = playbackManager.getLoopMode(guildId);
@@ -1069,6 +1100,20 @@ export async function handleControlPanelSelectMenu(
             content: `🎚️ Volume set to **${volVal}%** \`${createVolumeBar(volVal)}\``,
             ephemeral: true,
           });
+        } else if (selected === 'queue_reverse') {
+          const count = playbackManager.queueManager.getQueueLength(guildId);
+          if (count >= 2) {
+            playbackManager.reverseQueue(guildId);
+            await interaction.reply({
+              content: `${EMOJI.REVERSE} Reversed **${count}** tracks in the queue! Songs will now play in opposite order.`,
+              ephemeral: true,
+            });
+          } else {
+            await interaction.reply({
+              content: 'Need at least 2 tracks in the queue to reverse.',
+              ephemeral: true,
+            });
+          }
         }
         break;
       }
