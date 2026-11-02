@@ -4507,6 +4507,7 @@ body {
 /* ── Responsive Layouts (Requirement 25) ─────────────────────── */
 
 @media (max-width: 1024px) {
+
   .player-top-row,
   .player-bottom-row {
     grid-template-columns: 1fr;
@@ -6080,6 +6081,7 @@ input:focus-visible,
     opacity: 0;
     transform: translateY(14px) scale(0.98);
   }
+
   100% {
     opacity: 1;
     transform: translateY(0) scale(1);
@@ -6181,8 +6183,15 @@ input:focus-visible,
 }
 
 @keyframes pulseRing {
-  0% { transform: scale(0.95); opacity: 0.8; }
-  100% { transform: scale(1.2); opacity: 0; }
+  0% {
+    transform: scale(0.95);
+    opacity: 0.8;
+  }
+
+  100% {
+    transform: scale(1.2);
+    opacity: 0;
+  }
 }
 
 .control-text-input {
