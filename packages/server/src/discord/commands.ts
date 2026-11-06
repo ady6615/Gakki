@@ -911,7 +911,7 @@ export async function handleChatInputCommand(
           userId,
         });
         await interaction.editReply({
-          content: `✅ Joined voice channel **${userVoiceChannel.name}**! Here are your quick playback options:`,
+          content: `✅ Joined voice channel **${userVoiceChannel.name}**! Click **Play Music** or pick a quick playback option below:`,
           embeds,
           components,
         });

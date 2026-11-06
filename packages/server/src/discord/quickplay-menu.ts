@@ -5,6 +5,9 @@ import {
   ButtonStyle,
   StringSelectMenuBuilder,
   StringSelectMenuOptionBuilder,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
   type ButtonInteraction,
   type StringSelectMenuInteraction,
   type GuildMember,
@@ -150,7 +153,7 @@ export async function buildQuickPlayMenu(
   const embed = new EmbedBuilder()
     .setTitle('⚡ Welcome Back! QuickPlay Music Menu')
     .setDescription(
-      'Ready to jump back into the music? Pick an instant playback option below, resume your favorite playlists, or discover smart mixes!',
+      'Ready to jump back into the music? Click **Play Music** to start playing songs or URLs, pick an instant mix below, or resume your previous playlists!',
     )
     .setColor(0x5865f2)
     .addFields(
@@ -306,15 +309,20 @@ export async function buildQuickPlayMenu(
 
   components.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(playlistSelect));
 
-  // Row 3: Dedicated "Play the songs I played yesterday" button
-  const yesterdayButtonRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+  // Row 3: Dedicated Action Buttons: "Play Music" (same as /play) & "Play the songs I played yesterday"
+  const actionButtonRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId('gakki:qp:play')
+      .setLabel('Play Music')
+      .setEmoji('▶️')
+      .setStyle(ButtonStyle.Success),
     new ButtonBuilder()
       .setCustomId('gakki:qp:yesterday')
       .setLabel('Play the songs I played yesterday')
       .setEmoji('📅')
-      .setStyle(ButtonStyle.Success),
+      .setStyle(ButtonStyle.Secondary),
   );
-  components.push(yesterdayButtonRow);
+  components.push(actionButtonRow);
 
   // Row 4: Genre Mix Dropdown (if genres exist)
   if (distinctGenres.length > 0) {
@@ -518,6 +526,43 @@ export async function handleQuickPlayInteraction(
   const { playbackManager, analyticsManager, playlistManager, trackManager, recManager, audioSourceManager } = context;
   const customId = interaction.customId;
   const userTag = (interaction.member as GuildMember)?.displayName || interaction.user.username;
+
+  // 0. Play Music button handler (opens play modal or resumes paused playback)
+  if (customId === 'gakki:qp:play') {
+    const curState = playbackManager.getState(guildId);
+    if (curState.playerState === 'PAUSED') {
+      await interaction.deferReply({ ephemeral: true });
+      await playbackManager.resume(guildId);
+      await interaction.editReply('▶️ Resumed playback.');
+      await refreshPanel(guildId, playbackManager).catch(() => {});
+      return;
+    }
+
+    if (typeof (interaction as any).showModal === 'function') {
+      const modal = new ModalBuilder()
+        .setCustomId('gakki:play_modal')
+        .setTitle('🎵 Play Song or Audio URL');
+
+      const inputField = new TextInputBuilder()
+        .setCustomId('gakki:play_input')
+        .setLabel('Song title, link, file, or folder')
+        .setPlaceholder('e.g. Bohemian Rhapsody, Spotify/YouTube link, folder/path')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMaxLength(300);
+
+      modal.addComponents(
+        new ActionRowBuilder<TextInputBuilder>().addComponents(inputField),
+      );
+
+      await (interaction as any).showModal(modal);
+      return;
+    }
+
+    await interaction.deferReply({ ephemeral: true });
+    await interaction.editReply('🎵 Use `/play <song name or link>` to play music!');
+    return;
+  }
 
   // 1. Player Panel button handler
   if (customId === 'gakki:qp:panel') {

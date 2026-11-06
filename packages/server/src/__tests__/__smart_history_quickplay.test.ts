@@ -391,6 +391,16 @@ async function runTests() {
     'Button has exact label "Play the songs I played yesterday"',
   );
 
+  const allPlayButtons = yMenu.components.flatMap((row: any) =>
+    row.components.filter((c: any) => c.data.custom_id === 'gakki:qp:play'),
+  );
+  assert(allPlayButtons.length >= 1, 'QuickPlay menu includes dedicated "Play Music" button');
+  const playBtn = allPlayButtons[0];
+  assert(
+    playBtn.data.label === 'Play Music',
+    'Button has exact label "Play Music"',
+  );
+
   const playlistSelectComp: any = yMenu.components[1]?.components[0];
   const optionsList = playlistSelectComp?.options || playlistSelectComp?.data?.options || [];
   const ySelectOption = optionsList.find((o: any) =>
@@ -483,6 +493,33 @@ async function runTests() {
 
   const activeRecentPl = await playlistManager.getPlaylist(yPlaylist!.id);
   assert(activeRecentPl !== null, 'Active recent yesterday playlist (< 2 days old) is preserved and NOT deleted');
+
+  // 4.7 QuickPlay "Play Music" button interaction test
+  let modalShown: any = null;
+  const mockPlayInteraction: any = {
+    guildId: yGuildId,
+    customId: 'gakki:qp:play',
+    isButton: () => true,
+    isStringSelectMenu: () => false,
+    showModal: async (modal: any) => {
+      modalShown = modal;
+    },
+    deferReply: async () => {},
+    editReply: async () => {},
+    member: { displayName: 'Tester', voice: { channel: { id: 'vc_123' } } },
+    user: { id: yUserId, username: 'Tester' },
+    client: { guilds: { fetch: async () => null } },
+  };
+
+  await handleQuickPlayInteraction(mockPlayInteraction, {
+    playbackManager,
+    analyticsManager,
+    playlistManager,
+    trackManager,
+  });
+
+  assert(modalShown !== null, 'Clicking "Play Music" button presents play modal');
+  assert(modalShown.data?.custom_id === 'gakki:play_modal', 'Modal custom_id is gakki:play_modal');
 
   console.log('\n================================================================');
   console.log('✅ ALL SMART HISTORY, MOST PLAYED & QUICKPLAY TESTS PASSED!');
